@@ -1,0 +1,14 @@
+# AI agent folders (ignored whether or not they currently exist)
+.claude/
+.cursor/
+.windsurf/
+.aider/
+.opencode/
+.codex/
+.agents/
+
+# Trellis: only keep the spec layer under version control
+.trellis/
+!.trellis/
+.trellis/*
+!.trellis/spec/
