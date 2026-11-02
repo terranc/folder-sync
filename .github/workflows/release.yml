@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build DMG
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          FS_VERSION="$VERSION" ./app/make-dmg.sh
+          lipo -archs app/build/FolderSync.app/Contents/MacOS/FolderSync
+          hdiutil verify "app/build/FolderSync-$VERSION.dmg"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "FolderSync $TAG" --generate-notes
+          gh release upload "$TAG" app/build/FolderSync-*.dmg --clobber
