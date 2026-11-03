@@ -63,6 +63,7 @@ OPT_YES=0
 OPT_NOWAIT=0
 OPT_BG=0
 OPT_PREVIEW=0
+OPT_REPLACE=0
 OPT_APP_PATH=""
 OPT_KEEP_APP=0
 ARGS=()
@@ -1757,6 +1758,155 @@ cmd_global_set() {
   info "已保存"
 }
 
+# ---------------- 配置备份：导出 / 导入 ----------------
+#
+# 备份文件是一个 JSON：format / format_version / exported_at / config（配置原文）。
+# 应用导出时还会补上 settings（浮动状态条等）和 autostart；命令行导出只含配置。
+# 不含 SSH 私钥和 known_hosts：私钥不该进备份文件，主机指纹重装后重新核对更稳妥。
+
+CONFIG_BACKUP_FORMAT="folder-sync-config"
+CONFIG_BACKUP_VERSION=1
+
+# 从备份文件里取出配置原文（JSON 转义交给 perl 的 JSON::PP 处理，不手工解析）
+backup_config_text() {
+  FS_BACKUP_FORMAT="$CONFIG_BACKUP_FORMAT" FS_BACKUP_VERSION="$CONFIG_BACKUP_VERSION" perl -MJSON::PP -e '
+    use strict; use warnings;
+    open my $in, "<:raw", $ARGV[0] or die "无法读取备份文件：$!\n";
+    my $t = do { local $/; <$in> };
+    close $in;
+    my $d = eval { JSON::PP->new->utf8(0)->decode($t) };
+    die "备份文件不是有效的 JSON\n" unless $d && ref $d eq "HASH";
+    die "不是 FolderSync 导出的配置文件\n" unless ( $d->{format} // "" ) eq $ENV{FS_BACKUP_FORMAT};
+    my $v = $d->{format_version} // 0;
+    die "备份文件的格式版本（$v）比当前 FolderSync 新，请先升级 FolderSync\n" if $v > $ENV{FS_BACKUP_VERSION};
+    my $c = $d->{config};
+    die "备份文件里没有配置内容\n" unless defined $c && length $c;
+    print $c;
+    print "\n" unless $c =~ /\n\z/;
+  ' "$1"
+}
+
+# 配置里的所有段名（去重、保持顺序），含 global
+config_sections() {
+  [ -f "$1" ] || return 0
+  awk '
+    /^[[:space:]]*\[[^]]*\][[:space:]]*$/ {
+      n = $0
+      sub(/^[[:space:]]*\[/, "", n); sub(/\][[:space:]]*$/, "", n)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", n)
+      if (n != "" && !seen[n]++) print n
+    }' "$1"
+}
+
+# 合并：本机配置原样保留，只补进本机没有的段（本机没有 [global] 时才带上备份里的）。
+# 备份里第一段之前的注释块是导出方的文件头，不搬过来。
+merge_config_text() {   # $1=本机配置  $2=备份里的配置原文
+  if [ ! -s "$1" ]; then cat "$2"; return 0; fi
+  FS_BACKUP_CONFIG="$2" awk '
+    function sec_name(line,   n) {
+      if (line !~ /^[[:space:]]*\[[^]]*\][[:space:]]*$/) return ""
+      n = line
+      sub(/^[[:space:]]*\[/, "", n); sub(/\][[:space:]]*$/, "", n)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", n)
+      return n
+    }
+    FILENAME == ENVIRON["FS_BACKUP_CONFIG"] {
+      n = sec_name($0)
+      if (n != "") { cur = n; keep = !(n in mine) && !(n in added) }
+      if (cur == "" || !keep) next
+      if (!(cur in added)) { added[cur] = 1; printf "\n" }
+      print
+      next
+    }
+    {
+      print
+      n = sec_name($0)
+      if (n != "") mine[n] = 1
+    }
+  ' "$1" "$2"
+}
+
+cmd_export() {
+  local out="${ARGS[0]:-}" json
+  [ -f "$CONFIG" ] || die "还没有配置文件: ${CONFIG}（先在应用里新增项目）"
+  json="$(printf '{"format":%s,"format_version":%s,"exported_at":%s,"config":%s}' \
+    "$(json_str "$CONFIG_BACKUP_FORMAT")" "$CONFIG_BACKUP_VERSION" \
+    "$(json_str "$(date -u '+%Y-%m-%dT%H:%M:%SZ')")" "$(json_str "$(cat "$CONFIG")")")"
+  if [ -z "$out" ]; then printf '%s\n' "$json"; return 0; fi
+  [ -d "$(dirname "$out")" ] || die "目录不存在: $(dirname "$out")"
+  ( umask 077; printf '%s\n' "$json" > "$out.tmp.$$" ) && mv -f "$out.tmp.$$" "$out" || {
+    rm -f "$out.tmp.$$"; die "写入失败: $out"; }
+  chmod 600 "$out" 2>/dev/null || true
+  info "已导出配置: $out"
+}
+
+cmd_import() {
+  local file="${ARGS[0]:-}" work txt added_f skipped_f local_secs n imported added_count local_count newf backup="" mode_name total
+  [ -n "$file" ] || die "用法: $APP import <备份文件> [--preview] [--replace]"
+  [ -f "$file" ] || die "找不到备份文件: $file"
+  work="$PATDIR/import"
+  mkdir -p "$work"
+  txt="$work/config.conf"; added_f="$work/added"; skipped_f="$work/skipped"
+  : > "$added_f"; : > "$skipped_f"
+  backup_config_text "$file" > "$txt" 2> "$work/error" || die "$(trim "$(cat "$work/error")")"
+  grep -q '=' "$txt" || die "备份文件里没有配置内容"
+  if grep -vE '^[[:space:]]*\[[^]]*\][[:space:]]*$' "$txt" | grep -qE '^[[:space:]]*\['; then
+    die "备份文件里的配置格式不正确"
+  fi
+  local_secs="$(config_sections "$CONFIG")"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    case "$n" in global) continue ;; esac
+    if printf '%s\n' "$local_secs" | grep -qxF -- "$n"; then
+      printf '%s\n' "$n" >> "$skipped_f"
+    else
+      printf '%s\n' "$n" >> "$added_f"
+    fi
+  done <<< "$(config_sections "$txt")"
+  imported="$(config_sections "$txt" | grep -vx global | grep -c . || true)"
+  added_count="$(grep -c . "$added_f" || true)"
+  if [ "$OPT_PREVIEW" = 1 ]; then
+    if [ "$OPT_REPLACE" = 1 ]; then mode_name=replace; total="$imported"; else
+      mode_name=merge
+      local_count="$(printf '%s\n' "$local_secs" | grep -vx global | grep -c . || true)"
+      total=$(( local_count + added_count ))
+    fi
+    printf '{"ok":true,"mode":%s,"imported":%s,"added":%s,"skipped":%s,"total_after":%s}\n' \
+      "$(json_str "$mode_name")" "$imported" "$(json_lines "$added_f")" "$(json_lines "$skipped_f")" "$total"
+    return 0
+  fi
+  newf="$work/new.conf"
+  if [ "$OPT_REPLACE" = 1 ]; then
+    cat "$txt" > "$newf"
+  else
+    merge_config_text "$CONFIG" "$txt" > "$newf"
+  fi
+  grep -q '=' "$newf" || die "导入后没有项目配置，已放弃（本机配置未改动）"
+  if grep -vE '^[[:space:]]*\[[^]]*\][[:space:]]*$' "$newf" | grep -qE '^[[:space:]]*\['; then
+    die "导入后配置格式不正确，已放弃（本机配置未改动）"
+  fi
+  mkdir -p "$(dirname "$CONFIG")"
+  if [ -f "$CONFIG" ]; then
+    local stamp n=1
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup="$CONFIG.bak.$stamp"
+    while [ -e "$backup" ]; do backup="$CONFIG.bak.$stamp-$n"; n=$(( n + 1 )); done
+    cp -p "$CONFIG" "$backup" || die "备份当前配置失败: $backup"
+  fi
+  chmod 600 "$newf" 2>/dev/null || true
+  mv -f "$newf" "$CONFIG" || die "写入配置失败: $CONFIG"
+  if [ "$OPT_JSON" = 1 ]; then
+    printf '{"ok":true,"added":%s,"skipped":%s,"backup":%s}\n' \
+      "$(json_lines "$added_f")" "$(json_lines "$skipped_f")" \
+      "$( if [ -n "$backup" ]; then json_str "$backup"; else printf 'null'; fi )"
+    return 0
+  fi
+  info "已导入配置: $CONFIG"
+  if [ -s "$added_f" ]; then info "新增项目: $(tr '\n' ' ' < "$added_f")"; fi
+  if [ -s "$skipped_f" ]; then info "同名项目保留本机配置: $(tr '\n' ' ' < "$skipped_f")"; fi
+  if [ -n "$backup" ]; then info "原配置已备份: $backup"; fi
+}
+
 # ---------------- 安装 ----------------
 
 # 复制到临时文件再改名替换：正在运行的 folder-sync（bash 边读边执行脚本）继续读旧文件，
@@ -2042,6 +2192,10 @@ $APP —— 本地 → 远端单向推送（SSH + GNU rsync）
   init / list / validate / test <规则>
   trust-host <规则>        核对并信任服务器指纹（首次连接新服务器时）
   rules --json            规则与全局设置（JSON）
+  export [文件]           导出配置为 JSON（不给文件则输出到标准输出）；不含 SSH 私钥和 known_hosts
+  import <文件> [--preview] [--replace]
+                          导入配置：默认只补进本机没有的项目，同名项目保留本机配置，导入前自动备份；
+                          --preview 只输出将发生的变化（JSON），--replace 用备份整份替换
   rule-add <规则> k=v...   rule-set <规则> k=v...   rule-rm <规则>   rule-rename <旧> <新>
   global-set k=v...
 服务:
@@ -2073,6 +2227,7 @@ while [ $# -gt 0 ]; do
     --no-wait)     OPT_NOWAIT=1; shift ;;
     --bg)          OPT_BG=1; shift ;;
     --preview)     OPT_PREVIEW=1; shift ;;
+    --replace)     OPT_REPLACE=1; shift ;;
     --app-path)    OPT_APP_PATH="${2:-}"; shift 2 ;;
     --keep-app)    OPT_KEEP_APP=1; shift ;;
     -h|--help)     CMD="help"; shift ;;
@@ -2098,6 +2253,8 @@ case "$CMD" in
   ack)         cmd_ack ;;
   status)      cmd_status ;;
   rules)       cmd_rules ;;
+  export)      cmd_export ;;
+  import)      cmd_import ;;
   history)     cmd_history ;;
   run-files)   cmd_run_files ;;
   test)        cmd_test ;;

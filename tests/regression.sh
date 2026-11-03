@@ -249,6 +249,52 @@ check "rule-add + rules --json" 'python3 -c "import json,sys; d=json.load(open(s
 run rule-rename new2 new3; run rule-rm new3
 check "rule-rename and rule-rm" '[ "$result" -eq 0 ] && ! grep -q "new[23]" "$FOLDER_SYNC_CONFIG" && grep -q "# 规则内注释" "$FOLDER_SYNC_CONFIG"'
 
+# ---------------------------------------------------------------- 导出 / 导入配置
+global_conf; rule site "$L/site" /site; rule blog "$L/blog" /blog
+run export "$TEST_TMP/export.json"
+check "export writes a 600 JSON backup of the whole config" '[ "$result" -eq 0 ] && [ "$(stat -f %Lp "$TEST_TMP/export.json")" = 600 ] && valid_json "$TEST_TMP/export.json"'
+check "export records format, version and the full config text" 'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d[\"format\"]==\"folder-sync-config\" and d[\"format_version\"]==1 and d[\"exported_at\"] and \"[site]\" in d[\"config\"] and \"[blog]\" in d[\"config\"]" "$TEST_TMP/export.json"'
+
+mkdir -p "$L/other-site"
+cat > "$TEST_TMP/other.conf" <<EOF
+# 本机已有配置
+[global]
+known_hosts = $TEST_TMP/known_hosts
+debounce = 3
+
+[site]
+host = example.invalid
+user = other
+local = $L/other-site
+remote = /other/site
+EOF
+cp "$TEST_TMP/other.conf" "$TEST_TMP/other.before"
+FOLDER_SYNC_CONFIG="$TEST_TMP/other.conf" run import "$TEST_TMP/export.json" --preview
+check "import --preview reports what merge would add" 'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d[\"ok\"] and d[\"mode\"]==\"merge\" and d[\"imported\"]==2 and d[\"added\"]==[\"blog\"] and d[\"skipped\"]==[\"site\"]" "$TEST_TMP/output"'
+check "import --preview leaves the config untouched" 'cmp -s "$TEST_TMP/other.before" "$TEST_TMP/other.conf"'
+
+FOLDER_SYNC_CONFIG="$TEST_TMP/other.conf" run import "$TEST_TMP/export.json"
+check "import merges missing projects and keeps the local one" 'contains "新增项目: blog" && grep -q "remote = /blog" "$TEST_TMP/other.conf" && grep -q "remote = /other/site" "$TEST_TMP/other.conf"'
+check "import keeps the local preamble and [global]" 'head -1 "$TEST_TMP/other.conf" | grep -qx "# 本机已有配置" && grep -q "^debounce = 3" "$TEST_TMP/other.conf" && ! grep -q "^debounce = 0.2" "$TEST_TMP/other.conf"'
+check "import backs up the previous config" 'ls "$TEST_TMP"/other.conf.bak.* >/dev/null 2>&1'
+check "imported config still parses (list shows both projects)" 'FOLDER_SYNC_CONFIG="$TEST_TMP/other.conf" /bin/bash "$FS" list 2>&1 | grep -q "blog"'
+
+FOLDER_SYNC_CONFIG="$TEST_TMP/other.conf" run import "$TEST_TMP/export.json" --replace
+check "import --replace takes the backup as is" '[ "$result" -eq 0 ] && grep -q "remote = /site" "$TEST_TMP/other.conf" && ! grep -q "/other/site" "$TEST_TMP/other.conf"'
+
+FOLDER_SYNC_CONFIG="$TEST_TMP/fresh/config.conf" run import "$TEST_TMP/export.json"
+check "import into a machine without config restores every project" '[ "$result" -eq 0 ] && grep -q "\[site\]" "$TEST_TMP/fresh/config.conf" && grep -q "\[blog\]" "$TEST_TMP/fresh/config.conf" && ! ls "$TEST_TMP/fresh"/config.conf.bak.* >/dev/null 2>&1'
+
+printf 'not json at all\n' > "$TEST_TMP/bad.json"
+cp "$FOLDER_SYNC_CONFIG" "$TEST_TMP/good.before"
+run import "$TEST_TMP/bad.json"
+check "a non-JSON file is rejected and the config is untouched" '[ "$result" -ne 0 ] && contains "备份文件不是有效的 JSON" && cmp -s "$TEST_TMP/good.before" "$FOLDER_SYNC_CONFIG"'
+cat > "$TEST_TMP/foreign.json" <<'EOF'
+{"format":"other-tool","format_version":1,"config":"[x]\nhost = h\n"}
+EOF
+run import "$TEST_TMP/foreign.json"
+check "a foreign JSON file is rejected" '[ "$result" -ne 0 ] && contains "不是 FolderSync 导出的配置文件"'
+
 # ---------------------------------------------------------------- 日志：分段读取 / 无变化不记录 / 自动清理
 global_conf; rule logs "$L/logs" /logs
 for i in $(seq 1 20); do echo "$i" > "$L/logs/f$i.txt"; done

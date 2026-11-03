@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import WebKit
 
 // ============================== 网页界面（浮层 / 独立窗口共用） ==============================
@@ -52,7 +53,7 @@ final class WebBridge: NSObject, WKScriptMessageHandler {
             CLI.runAsync(args, timeout: (body["timeout"] as? Double) ?? 120) { [weak self] r in
                 self?.reply(wv, id, ["code": Int(r.code), "out": r.out, "err": r.err])
                 StateStore.shared.tick()
-                if args.first.map({ $0.hasPrefix("rule-") || $0 == "global-set" }) == true {
+                if args.first.map({ $0.hasPrefix("rule-") || $0 == "global-set" || $0 == "import" }) == true {
                     StateStore.shared.reloadRules(force: true)
                 }
             }
@@ -96,6 +97,59 @@ final class WebBridge: NSObject, WKScriptMessageHandler {
             let path = FileManager.default.fileExists(atPath: log) ? log : fallback
             NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"), configuration: NSWorkspace.OpenConfiguration())
             reply(wv, id, ["code": 0])
+        case "exportConfig":
+            // 导出：配置文件原文由命令行导出，应用再把本页设置和开机自启补进同一个 JSON 文件
+            let panel = NSSavePanel()
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd"
+            panel.nameFieldStringValue = "folder-sync-config-\(df.string(from: Date())).json"
+            panel.canCreateDirectories = true
+            NSApp.activate(ignoringOtherApps: true)
+            guard panel.runModal() == .OK, let url = panel.url else { reply(wv, id, ["cancelled": true]); return }
+            CLI.runAsync(["export"], timeout: 30) { [weak self] r in
+                guard r.code == 0, let data = r.out.data(using: .utf8),
+                      var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                    let msg = (r.err.isEmpty ? r.out : r.err).trimmingCharacters(in: .whitespacesAndNewlines)
+                    self?.reply(wv, id, ["code": 1, "err": msg.isEmpty ? "导出失败" : msg])
+                    return
+                }
+                obj["app_version"] = Update.version
+                obj["settings"] = Settings.dict()
+                obj["autostart"] = !FileManager.default.fileExists(atPath: CLI.stateDir + "/autostart.off")
+                guard let json = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
+                    self?.reply(wv, id, ["code": 1, "err": "无法生成导出文件"]); return
+                }
+                do {
+                    try json.write(to: url, options: .atomic)
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                    self?.reply(wv, id, ["code": 0, "path": url.path])
+                } catch {
+                    self?.reply(wv, id, ["code": 1, "err": "写入失败：\(error.localizedDescription)"])
+                }
+            }
+        case "importConfig":
+            // 导入：先让命令行算出将发生的变化（预览），由网页弹确认后再真正写入
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [.json]
+            NSApp.activate(ignoringOtherApps: true)
+            guard panel.runModal() == .OK, let url = panel.url else { reply(wv, id, ["cancelled": true]); return }
+            guard let data = FileManager.default.contents(atPath: url.path),
+                  let file = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                reply(wv, id, ["code": 1, "err": "不是有效的配置文件"]); return
+            }
+            CLI.runAsync(["import", url.path, "--preview"], timeout: 30) { [weak self] r in
+                guard r.code == 0, let d = r.out.data(using: .utf8),
+                      var preview = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else {
+                    let msg = (r.err.isEmpty ? r.out : r.err).trimmingCharacters(in: .whitespacesAndNewlines)
+                    self?.reply(wv, id, ["code": 1, "err": msg.isEmpty ? "这个文件不是 FolderSync 的配置备份" : msg])
+                    return
+                }
+                // 应用设置来自导出文件本身（命令行不解析这一项）
+                if let s = file["settings"] as? [String: Any] { preview["settings"] = s }
+                if let a = file["autostart"] as? Bool { preview["autostart"] = a }
+                self?.reply(wv, id, ["code": 0, "path": url.path, "preview": preview])
+            }
         case "settings":
             if let v = body["value"] as? [String: Any] { Settings.apply(v) }
             reply(wv, id, Settings.dict())

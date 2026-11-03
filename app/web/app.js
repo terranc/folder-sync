@@ -610,6 +610,13 @@
         <textarea id="g-ignore" spellcheck="false">${esc(ignore)}</textarea></div>
       <div class="srow end"><span class="desc" id="g-hint">修改后点保存，守护进程会自动应用</span><button class="btn primary" data-a="save-sync">保存</button></div>
     </div>
+    <div class="section">配置备份</div>
+    <div class="group">
+      <div class="srow"><div class="lbl"><b>导出配置</b><div class="desc">把所有项目和本页设置存成一个文件，系统重装后用来恢复；不含 SSH 私钥</div></div>
+        <button class="btn" data-a="export-config">导出…</button></div>
+      <div class="srow"><div class="lbl"><b>导入配置</b><div class="desc">只补进本机没有的项目，同名项目保留本机配置；导入前自动备份当前配置</div></div>
+        <button class="btn" data-a="import-config">导入…</button></div>
+    </div>
     <div class="section">后台服务</div>
     <div class="group">
       <div class="srow"><div class="lbl"><b>守护进程</b><div class="desc" id="svc-line">—</div></div>
@@ -693,6 +700,44 @@
       overlayCorner: on ? on.dataset.corner : 'bottomRight' } });
     if (!silent) toast('已保存');
   }
+
+  // ---------------- 配置备份（导出 / 导入） ----------------
+  async function exportConfig(btn) {
+    if (btn) btn.disabled = true;
+    const r = await call('exportConfig');
+    if (btn) btn.disabled = false;
+    if (!r || r.cancelled) return;
+    if (r.code !== 0) { toast(r.err || '导出失败'); return; }
+    toast('已导出到 ' + home(r.path || ''));
+  }
+
+  // 先取预览，用户确认后才写入；同名项目保留本机配置，导入前命令行会自动备份
+  async function importConfig(btn) {
+    if (btn) btn.disabled = true;
+    const r = await call('importConfig');
+    if (btn) btn.disabled = false;
+    if (!r || r.cancelled) return;
+    if (r.code !== 0) { toast(r.err || '导入失败'); return; }
+    const p = r.preview || {};
+    if (!p.ok) { toast(p.error || '这个文件不是 FolderSync 的配置备份'); return; }
+    const added = p.added || [], skipped = p.skipped || [];
+    const lines = [`备份里有 ${p.imported} 个项目`, added.length ? `新增 ${added.length} 个：${added.join('、')}` : '没有需要新增的项目'];
+    if (skipped.length) lines.push(`${skipped.length} 个同名项目保留本机配置：${skipped.join('、')}`);
+    if (p.settings) lines.push('本页的应用设置也会按备份恢复');
+    if (!confirm(`导入配置？\n${lines.join('\n')}\n\n导入前会自动备份当前配置。`)) return;
+    const out = await cli(['import', r.path, '--json']);
+    if (out.code !== 0) { toast(outMsg(out)); return; }
+    let res = {};
+    try { res = JSON.parse(out.out); } catch (e) { res = {}; }
+    if (p.settings) await call('settings', { value: p.settings });
+    if (typeof p.autostart === 'boolean' && p.autostart !== S.autostart) {
+      await cli(['autostart', p.autostart ? 'on' : 'off']);
+    }
+    keys.settingsReady = false;   // 下次状态推送时按新配置重画设置页
+    call('refresh');
+    toast(`已导入 ${(res.added || []).length} 个新项目${res.backup ? '，原配置已备份' : ''}`);
+  }
+
   // 点击更新：从 GitHub 下载新版本、覆盖安装，应用随后自动重启
   async function installUpdate(btn) {
     const u = S.update || {};
@@ -741,6 +786,8 @@
     if (a === 'quit') { call('quit'); return; }
     if (a === 'new') { if (MODE === 'popover') call('expand', { route: 'new' }); else go('new'); return; }
     if (a === 'save-sync') { saveSync(); return; }
+    if (a === 'export-config') { exportConfig(t); return; }
+    if (a === 'import-config') { importConfig(t); return; }
     if (a === 'recheck') { $('#setup').innerHTML = '<div class="empty">正在检查运行环境…</div>'; loadSetup(); return; }
     if (a === 'setup-install') { setupInstall(t); return; }
     if (a === 'open-brew') { call('openURL', { url: 'https://brew.sh/zh-cn/' }); return; }
@@ -785,7 +832,7 @@
       return {
         daemon_running: true, autostart: true, now, config: '/Users/me/.config/folder-sync/config.conf', rsync: '/opt/homebrew/bin/rsync',
         version: '2.3.0', update: { state: params.get('update') === 'new' ? 'available' : 'latest', version: '2.3.1', current: '2.3.0', progress: 0, message: '', installable: params.get('update') !== 'local' },
-        global: { debounce: '0.5', watch_ignore: '.git node_modules .idea .DS_Store' }, settings: { overlayDelay: 2, overlayCorner: 'bottomRight', overlayEnabled: true },
+        global: { debounce: '0.5', watch_ignore: '.git node_modules .idea .DS_Store' }, settings: this._settings || { overlayDelay: 2, overlayCorner: 'bottomRight', overlayEnabled: true },
         rules: [
           { name: 'pinme', enabled: true, valid: true, delete: false, local: '/Users/me/www/PinMe/meal.server', remote: '/data/www/pinme', host: 'pinme.example.com', user: 'deploy', port: '22', key_file: '', include: [], exclude: ['.git/**', 'runtime/**', 'vendor/**', 'storage/logs/**'], extra: '', remote_owner: '',
             run: { phase: 'transferring', trigger: 'full', percent: Math.min(99, Math.floor(el * 7) % 100), files_done: 132 + Math.floor(el), deleted: 0, speed_bps: 4404019, eta_s: 20, checked: 2140, check_total: 3150, current_file: 'public/assets/app.3f9c.js', current_started_at: now - 7, started_at: now - 30 }, last: null },
@@ -825,7 +872,24 @@
           ? { ok: false, missing: 'rsync fswatch', install_cmd: 'brew install rsync fswatch', rsync: { ok: false, path: '/usr/bin/rsync', version: 'openrsync: protocol version 29' }, fswatch: '', brew: '/opt/homebrew/bin/brew', app_location_ok: true }
           : { ok: true, missing: '', install_cmd: '', rsync: { ok: true, version: 'rsync  version 3.5.1' }, fswatch: '/opt/homebrew/bin/fswatch', brew: '/opt/homebrew/bin/brew', app_location_ok: true };
       }
-      if (msg.cmd === 'settings') res = this.state().settings;
+      if (msg.cmd === 'exportConfig') {
+        this.calls = (this.calls || []).concat(['exportConfig']);
+        res = { code: 0, path: '/Users/me/Downloads/folder-sync-config.json' };
+      }
+      if (msg.cmd === 'importConfig') {
+        this.calls = (this.calls || []).concat(['importConfig']);
+        res = { code: 0, path: '/Users/me/Downloads/folder-sync-config.json', preview: {
+          ok: true, mode: 'merge', imported: 2, added: ['blog'], skipped: ['pinme'],
+          settings: { overlayEnabled: true, overlayDelay: 3, overlayCorner: 'bottomLeft' }, autostart: true } };
+      }
+      if (msg.cmd === 'run' && msg.args[0] === 'import') {
+        this.calls = (this.calls || []).concat([msg.args.join(' ')]);
+        res.out = JSON.stringify({ ok: true, added: ['blog'], skipped: ['pinme'], backup: '/Users/me/.config/folder-sync/config.conf.bak.20260101-120000' });
+      }
+      if (msg.cmd === 'settings') {
+        if (msg.value) this._settings = Object.assign({}, this.state().settings, msg.value);
+        res = this.state().settings;
+      }
       if (msg.cmd === 'update') {
         this.calls = (this.calls || []).concat(['update ' + (msg.action || 'check')]);
         const u = Object.assign({}, this.state().update);

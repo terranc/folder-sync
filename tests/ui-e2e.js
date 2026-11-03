@@ -124,6 +124,15 @@ async function openPage(query, width, height) {
   const s = await openPage('?mode=window&route=settings', 1000, 1400);
   check('设置页有"开机自动启动"开关且默认开启', await s.ev(`!!document.getElementById('st-autostart') && document.getElementById('st-autostart').checked`));
   check('设置页有"卸载 FolderSync"', await s.ev(`!!document.querySelector('[data-sys="uninstall"]')`));
+
+  // ---------------- 设置页：导出 / 导入配置 ----------------
+  check('设置页有导出、导入配置入口', await s.ev(`!!document.querySelector('[data-a="export-config"]') && !!document.querySelector('[data-a="import-config"]')`));
+  await s.ev(`document.querySelector('[data-a="export-config"]').click()`); await sleep(200);
+  check('导出配置走原生保存面板', /exportConfig/.test(await s.ev(`(window.__fsMock.calls || []).join(' ')`)));
+  await s.ev(`window.confirm = () => true; document.querySelector('[data-a="import-config"]').click()`); await sleep(900);
+  const icalls = await s.ev(`(window.__fsMock.calls || []).filter(c => c === 'importConfig' || c.indexOf('import ') === 0)`);
+  check('导入先取预览、确认后才写入，并恢复应用设置', icalls.length === 2 && icalls[1].indexOf('--json') > 0, icalls);
+  check('导入后按备份恢复浮动状态条设置', (await s.ev(`(document.getElementById('st-delay') || {}).value`)) === '3');
   await s.shot('settings');
 
   // ---------------- 安装引导（缺少依赖） ----------------

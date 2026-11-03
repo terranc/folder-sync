@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- 设置页新增「配置备份」：导出配置把所有项目和本页的应用设置存成一个 JSON 文件，重装系统后导入即可恢复；导入默认合并（同名项目保留本机配置，只补进本机没有的项目），写入前自动把当前配置备份成 `config.conf.bak.<时间>`。导出文件不含 SSH 私钥和 `known_hosts`。
+- 命令行新增 `export [文件]` 与 `import <文件> [--preview] [--replace]`，`--preview` 只输出将发生的变化（JSON）。
+
+
 ## [2.3.0] - 2026-11-04
 
 ### Added
