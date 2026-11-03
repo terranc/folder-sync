@@ -831,7 +831,7 @@
       const now = Date.now() / 1000, el = now - this.t0;
       return {
         daemon_running: true, autostart: true, now, config: '/Users/me/.config/folder-sync/config.conf', rsync: '/opt/homebrew/bin/rsync',
-        version: '2.3.0', update: { state: params.get('update') === 'new' ? 'available' : 'latest', version: '2.3.1', current: '2.3.0', progress: 0, message: '', installable: params.get('update') !== 'local' },
+        version: '2.4.0', update: { state: params.get('update') === 'new' ? 'available' : 'latest', version: '2.4.1', current: '2.4.0', progress: 0, message: '', installable: params.get('update') !== 'local' },
         global: { debounce: '0.5', watch_ignore: '.git node_modules .idea .DS_Store' }, settings: this._settings || { overlayDelay: 2, overlayCorner: 'bottomRight', overlayEnabled: true },
         rules: [
           { name: 'pinme', enabled: true, valid: true, delete: false, local: '/Users/me/www/PinMe/meal.server', remote: '/data/www/pinme', host: 'pinme.example.com', user: 'deploy', port: '22', key_file: '', include: [], exclude: ['.git/**', 'runtime/**', 'vendor/**', 'storage/logs/**'], extra: '', remote_owner: '',
