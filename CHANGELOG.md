@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-11-03
+
+### Changed
+
+- 进度浮层默认黑底调整为 35% 不透明，hover 时恢复全不透明，兼顾下层内容可见性与操作时的可读性。
+- 浮层拖拽位置仅在本次显示期间有效，消失后重新出现时恢复设置中的左下角或右下角。
+- 应用版本更新为 2.2.1（build 5）。
+
+### Fixed
+
+- 修复 hover 显示操作按钮和当前文件时，浮层高度、内部间距和背景位置发生抖动的问题。
+- 修复浮层内容区域无法拖动及拖动不跟手的问题，改用屏幕坐标计算窗口位移。
+
 ## [2.2.0] - 2026-11-03
 
 ### Added
