@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-11-04
+
+### Added
+
+- 菜单栏小窗底部、「退出」左侧显示当前版本号；有新版本时在同一位置显示高亮的「更新到 x.y.z」按钮。
+- 自动检查更新：启动后延迟检查一次，之后每 6 小时一次；GitHub API 被限流时自动改用 `releases/latest` 的重定向结果，不打扰界面。
+- 点击更新即从 GitHub Releases 下载 DMG，覆盖安装 `/Applications/FolderSync.app` 并自动重启；安装失败自动回滚到旧版本。
+- 设置页新增「关于」分组：版本号、更新状态与「检查更新」入口。
+
+### Changed
+
+- 设置页移除「"跳过"按钮出现时机」，该阈值改为程序内部固定 5 秒。
+- 切换浮动状态条的「位置」时，目标角落立即显示 2 秒预览，便于确认效果。
+- 应用版本更新为 2.3.0（build 6）。
+
+
 ## [2.2.1] - 2026-11-03
 
 ### Changed

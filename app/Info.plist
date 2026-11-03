@@ -2,37 +2,74 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleIdentifier</key><string>com.local.foldersync</string>
-	<key>CFBundleName</key><string>FolderSync</string>
-	<key>CFBundleDisplayName</key><string>FolderSync</string>
-	<key>CFBundleExecutable</key><string>FolderSync</string>
-	<key>CFBundleIconFile</key><string>AppIcon</string>
-	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>2.2.1</string>
-	<key>CFBundleVersion</key><string>5</string>
-	<key>LSMinimumSystemVersion</key><string>13.0</string>
-	<key>LSUIElement</key><true/>
-	<key>NSHighResolutionCapable</key><true/>
+	<key>CFBundleDisplayName</key>
+	<string>FolderSync</string>
+	<key>CFBundleExecutable</key>
+	<string>FolderSync</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.local.foldersync</string>
+	<key>CFBundleName</key>
+	<string>FolderSync</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2.3.0</string>
 	<key>CFBundleURLTypes</key>
-	<array><dict>
-		<key>CFBundleURLName</key><string>com.local.foldersync</string>
-		<key>CFBundleURLSchemes</key><array><string>foldersync</string></array>
-	</dict></array>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.local.foldersync</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>foldersync</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>6</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 	<key>NSServices</key>
 	<array>
 		<dict>
-			<key>NSMenuItem</key><dict><key>default</key><string>FolderSync：从远端下载</string></dict>
-			<key>NSMessage</key><string>downloadFromRemote</string>
-			<key>NSPortName</key><string>FolderSync</string>
-			<key>NSRequiredContext</key><dict/>
-			<key>NSSendFileTypes</key><array><string>public.item</string></array>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>FolderSync：从远端下载</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>downloadFromRemote</string>
+			<key>NSPortName</key>
+			<string>FolderSync</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
 		</dict>
 		<dict>
-			<key>NSMenuItem</key><dict><key>default</key><string>FolderSync：上传到远端</string></dict>
-			<key>NSMessage</key><string>uploadToRemote</string>
-			<key>NSPortName</key><string>FolderSync</string>
-			<key>NSRequiredContext</key><dict/>
-			<key>NSSendFileTypes</key><array><string>public.item</string></array>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>FolderSync：上传到远端</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>uploadToRemote</string>
+			<key>NSPortName</key>
+			<string>FolderSync</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
 		</dict>
 	</array>
 </dict>
