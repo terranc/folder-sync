@@ -19,6 +19,8 @@ final class OverlayModel: ObservableObject {
     @Published var rows: [OverlayRow] = []
     /// 点击状态条（非按钮区域）时打开大窗口的某个页面
     var open: (String) -> Void = { _ in }
+    /// 拖动整个状态条；Bool 表示本次拖动是否已结束
+    var drag: (Bool) -> Void = { _ in }
 }
 
 struct OverlayRowView: View {
@@ -49,8 +51,11 @@ struct OverlayRowView: View {
                 Text(row.title).font(.system(size: 12, weight: .semibold)).foregroundColor(.white).lineLimit(1)
                 Text(row.detail).font(.system(size: 12)).foregroundColor(.white.opacity(0.85)).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
-                if hover { buttons }
+                buttons
+                    .opacity(hover ? 1 : 0)
+                    .allowsHitTesting(hover)
             }
+            .frame(height: 22)
             if let p = row.percent {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
@@ -59,12 +64,13 @@ struct OverlayRowView: View {
                     }
                 }.frame(height: 3)
             }
-            if hover && !row.file.isEmpty {
+            if !row.file.isEmpty {
                 Text(row.file).font(.system(size: 11)).foregroundColor(.white.opacity(0.7)).lineLimit(1).truncationMode(.middle)
+                    .opacity(hover ? 1 : 0)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(row.kind == .failed ? 0.82 : 0.68)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(hover ? 1 : (row.kind == .failed ? 0.82 : 0.35))))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(row.kind == .failed ? tint.opacity(0.7) : Color.white.opacity(0.08), lineWidth: 1))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
@@ -107,6 +113,12 @@ struct OverlayView: View {
         .frame(width: 400)
         .padding(4)
         .fixedSize(horizontal: false, vertical: true)
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 3)
+                .onChanged { _ in model.drag(false) }
+                .onEnded { _ in model.drag(true) }
+        )
     }
 }
 
@@ -126,6 +138,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var shownRuns = Set<String>()
     private var finishSeen: [String: TimeInterval] = [:]
     private var programmaticMove = false
+    /// 拖动位置仅在本次显示期间有效，浮层消失后恢复设置中的角落
+    private var temporaryOrigin: NSPoint?
+    private var dragStartOrigin: NSPoint?
+    private var dragStartMouse: NSPoint?
 
     override init() {
         super.init()
@@ -142,6 +158,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.acceptsMouseMovedEvents = true
         panel.contentView = host
         panel.delegate = self
+        model.drag = { [weak self] ended in
+            self?.movePanel(ended: ended)
+        }
     }
 
     private func fmtSpeed(_ b: Double) -> String {
@@ -208,11 +227,33 @@ final class OverlayController: NSObject, NSWindowDelegate {
         rows = Array(rows.prefix(3))
         if rows != model.rows { model.rows = rows }
         if rows.isEmpty || !Settings.overlayEnabled {
+            temporaryOrigin = nil
+            dragStartOrigin = nil
+            dragStartMouse = nil
             if panel.isVisible { panel.orderOut(nil) }
         } else {
             layout()
             if !panel.isVisible { panel.orderFrontRegardless() }
         }
+    }
+
+    private func movePanel(ended: Bool) {
+        if ended {
+            dragStartOrigin = nil
+            dragStartMouse = nil
+            temporaryOrigin = panel.frame.origin
+            return
+        }
+        // 使用屏幕坐标计算位移，避免浮层移动后改变 SwiftUI 的局部坐标参照
+        let mouse = NSEvent.mouseLocation
+        let startMouse = dragStartMouse ?? mouse
+        let startOrigin = dragStartOrigin ?? panel.frame.origin
+        dragStartMouse = startMouse
+        dragStartOrigin = startOrigin
+        let origin = NSPoint(x: startOrigin.x + mouse.x - startMouse.x,
+                             y: startOrigin.y + mouse.y - startMouse.y)
+        temporaryOrigin = origin
+        panel.setFrameOrigin(origin)
     }
 
     private func layout() {
@@ -222,9 +263,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let vf = screen.visibleFrame
         let right = Settings.overlayCorner != "bottomLeft"
         var x: CGFloat, y: CGFloat
-        if let a = UserDefaults.standard.array(forKey: "overlayAnchor") as? [Double], a.count == 2 {
-            // 保存的是"贴靠的那条边"的 x 与底边 y：高度变化时向上长
-            x = right ? CGFloat(a[0]) - size.width : CGFloat(a[0]); y = CGFloat(a[1])
+        if let origin = temporaryOrigin {
+            x = origin.x; y = origin.y
         } else {
             x = right ? vf.maxX - size.width - 12 : vf.minX + 12; y = vf.minY + 12
         }
@@ -242,8 +282,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     func windowDidMove(_ notification: Notification) {
         guard !programmaticMove else { return }
-        let f = panel.frame
-        let right = Settings.overlayCorner != "bottomLeft"
-        UserDefaults.standard.set([Double(right ? f.maxX : f.minX), Double(f.minY)], forKey: "overlayAnchor")
+        temporaryOrigin = panel.frame.origin
     }
 }
