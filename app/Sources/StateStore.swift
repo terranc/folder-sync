@@ -103,6 +103,8 @@ final class StateStore {
         obj["daemon_running"] = daemonRunning
         obj["now"] = Date().timeIntervalSince1970
         obj["settings"] = Settings.dict()
+        obj["version"] = Update.version
+        obj["update"] = Update.dict()
         return obj
     }
 }
@@ -114,10 +116,8 @@ enum Settings {
         get { d.object(forKey: "overlayDelay") as? Double ?? 2 }
         set { d.set(newValue, forKey: "overlayDelay") }
     }
-    static var skipAfter: Double {
-        get { d.object(forKey: "skipAfter") as? Double ?? 5 }
-        set { d.set(newValue, forKey: "skipAfter") }
-    }
+    /// 状态条上「跳过」按钮的出现阈值：程序内部固定 5 秒，不开放配置
+    static let skipAfter: Double = 5
     static var overlayCorner: String {
         get { d.string(forKey: "overlayCorner") ?? "bottomRight" }
         set { d.set(newValue, forKey: "overlayCorner"); d.removeObject(forKey: "overlayAnchor") }
@@ -127,11 +127,10 @@ enum Settings {
         set { d.set(newValue, forKey: "overlayEnabled") }
     }
     static func dict() -> [String: Any] {
-        ["overlayDelay": overlayDelay, "skipAfter": skipAfter, "overlayCorner": overlayCorner, "overlayEnabled": overlayEnabled]
+        ["overlayDelay": overlayDelay, "overlayCorner": overlayCorner, "overlayEnabled": overlayEnabled]
     }
     static func apply(_ v: [String: Any]) {
         if let x = v["overlayDelay"] as? Double { overlayDelay = max(0, x) }
-        if let x = v["skipAfter"] as? Double { skipAfter = max(1, x) }
         if let x = v["overlayCorner"] as? String { overlayCorner = x }
         if let x = v["overlayEnabled"] as? Bool { overlayEnabled = x }
     }

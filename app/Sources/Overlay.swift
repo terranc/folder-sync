@@ -142,7 +142,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var temporaryOrigin: NSPoint?
     private var dragStartOrigin: NSPoint?
     private var dragStartMouse: NSPoint?
-
+    /// 设置里切换"位置"时的 2 秒预览：额外的样例行 + 强制角落
+    private var previewRow: OverlayRow?
+    private var cornerOverride: String?
+    private var previewTimer: Timer?
+    var isPreviewing: Bool { previewRow != nil }
     override init() {
         super.init()
         host = FirstMouseHostingView(rootView: OverlayView(model: model))
@@ -225,8 +229,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
         }
         rows = Array(rows.prefix(3))
+        if let p = previewRow { rows.append(p) }
         if rows != model.rows { model.rows = rows }
-        if rows.isEmpty || !Settings.overlayEnabled {
+        if rows.isEmpty || (!Settings.overlayEnabled && previewRow == nil) {
             temporaryOrigin = nil
             dragStartOrigin = nil
             dragStartMouse = nil
@@ -237,7 +242,29 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// 设置里切换"位置"时，立刻在目标角落显示 2 秒状态条预览
+    func preview(corner: String) {
+        previewTimer?.invalidate()
+        cornerOverride = corner == "bottomLeft" ? "bottomLeft" : "bottomRight"
+        temporaryOrigin = nil
+        dragStartOrigin = nil
+        dragStartMouse = nil
+        previewRow = OverlayRow(id: "preview", kind: .running, title: "FolderSync",
+                                detail: "状态条会显示在这里 · 同步 58%", file: "",
+                                percent: 0.58, canSkip: false)
+        update(StateStore.shared)
+        previewTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.previewRow = nil
+            self.cornerOverride = nil
+            self.previewTimer = nil
+            self.update(StateStore.shared)
+        }
+        RunLoop.main.add(previewTimer!, forMode: .common)
+    }
+
     private func movePanel(ended: Bool) {
+        guard cornerOverride == nil else { return }   // 预览期间不改位置
         if ended {
             dragStartOrigin = nil
             dragStartMouse = nil
@@ -261,9 +288,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let size = host.fittingSize
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let vf = screen.visibleFrame
-        let right = Settings.overlayCorner != "bottomLeft"
+        let right = (cornerOverride ?? Settings.overlayCorner) != "bottomLeft"
         var x: CGFloat, y: CGFloat
-        if let origin = temporaryOrigin {
+        if let origin = temporaryOrigin, cornerOverride == nil {
             x = origin.x; y = origin.y
         } else {
             x = right ? vf.maxX - size.width - 12 : vf.minX + 12; y = vf.minY + 12

@@ -101,7 +101,7 @@
           <button data-go="rules">项目</button><button data-go="history">日志</button>
         </nav>
         <main id="main"></main>
-        <footer class="bottom"><span id="updated">—</span><span class="grow"></span><button class="link" data-a="quit">退出</button></footer>
+        <footer class="bottom"><span id="updated">—</span><span class="grow"></span><span id="verline"></span><button class="link" data-a="quit">退出</button></footer>
       </div>`;
     } else {
       app.innerHTML = `<div class="win">
@@ -137,6 +137,7 @@
     if (up) up.textContent = stamp ? '刚刚更新' : '—';
     document.querySelectorAll('.tabs [data-go]').forEach((b) => b.classList.toggle('on', b.dataset.go === route));
     if (MODE === 'window') renderSide();
+    renderVersion();
 
     if (route === 'rules' || route === 'projects') {
       const k = rules().map(ruleKey).join('#') + tick30() + (S.error || '');
@@ -160,8 +161,46 @@
       if (el) el.textContent = `${S.daemon_running ? '运行中' : '未运行'} · rsync：${S.rsync || '未找到 GNU rsync（brew install rsync）'}`;
       const b = $('[data-sys=reload]');
       if (b && !b.disabled) b.textContent = S.daemon_running ? '重启守护' : '启动守护';
+      const ul = $('#upd-line');
+      if (ul) ul.textContent = updStatus(S.update || {});
     }
   }
+  // ---------------- 版本号与更新 ----------------
+  let verKey = '';
+  function updLabel(u) {
+    if (u.state === 'downloading') return `下载中 ${Math.round((u.progress || 0) * 100)}%`;
+    if (u.state === 'installing') return '正在安装…';
+    if (u.state === 'available') return `更新到 ${u.version}`;
+    return '';
+  }
+  function updButtonHTML() {
+    const u = S.update || {}, label = updLabel(u);
+    if (!label) return '';
+    const busy = u.state !== 'available';
+    return `<button class="upd" data-a="update" title="从 GitHub 下载新版本并覆盖安装，完成后自动重启"${busy ? ' disabled' : ''}>${ico('refresh')}<span>${esc(label)}</span></button>`;
+  }
+  function updStatus(u) {
+    if (u.state === 'checking') return '正在检查更新…';
+    if (u.state === 'downloading') return `正在下载更新 ${Math.round((u.progress || 0) * 100)}%`;
+    if (u.state === 'installing') return '正在安装，应用即将重启…';
+    if (u.state === 'available') return `有新版本 ${u.version} 可用`;
+    if (u.state === 'latest') return '已是最新版本';
+    if (u.state === 'failed') return `检查更新失败：${u.message || '未知原因'}`;
+    return '自动检查更新（每 6 小时一次）';
+  }
+  // 小窗底部：版本号常驻，有新版本时版本号左侧出现高亮更新按钮
+  function renderVersion() {
+    const u = S.update || {};
+    const key = [S.version, u.state, u.version, u.progress, u.message].join('|');
+    if (key === verKey) return;
+    verKey = key;
+    const box = $('#verline');
+    if (box) box.innerHTML = updButtonHTML() + `<span class="ver" title="当前版本">v${esc(S.version || '')}</span>`;
+    const ub = $('#upd-box');
+    if (ub) ub.innerHTML = updButtonHTML() || '<button class="btn" data-a="check-update">检查更新</button>';
+  }
+
+
 
   function renderSide() {
     const nav = $('#sidenav');
@@ -190,6 +229,7 @@
 
   // 切换页面时整页渲染；之后由 update() 做增量更新
   function renderPage() {
+    verKey = '';   // 整页重画后「关于」里的更新按钮要重新计算
     const m = $('#main');
     if (route === 'rules' || route === 'projects') { crumb([['项目']]); m.innerHTML = listHTML(); }
     else if (route === 'history') { crumb([['日志']]); histSig = ''; histShown = FIRST; m.innerHTML = '<div id="hist"><div class="empty">加载中…</div></div>'; }
@@ -230,7 +270,7 @@
     const run = r.run, last = r.last;
     const failed = last && last.result === 'failed' && !last.acked && !run;
     const canSkip = run && run.phase === 'transferring' && run.current_file && run.current_started_at &&
-      (S.now - run.current_started_at) >= ((S.settings || {}).skipAfter || 5);
+      (S.now - run.current_started_at) >= 5;   // 与状态条一致：程序内部固定 5 秒
     const b = [];
     if (run) {
       if (canSkip) b.push(`<button class="btn" data-act="skip">跳过当前文件</button>`);
@@ -559,8 +599,6 @@
         <label class="toggle"><input type="checkbox" id="st-en" data-auto ${st.overlayEnabled !== false ? 'checked' : ''}><span></span></label></div>
       <div class="srow"><div class="lbl"><b>自动推送时的显示时机</b><div class="desc">推送持续超过这个时间才出现；手动全量同步、上传、下载会立即出现</div></div>
         <div class="unit"><input type="number" id="st-delay" data-auto min="0" step="0.5" value="${st.overlayDelay != null ? st.overlayDelay : 2}"><span>秒</span></div></div>
-      <div class="srow"><div class="lbl"><b>"跳过"按钮出现时机</b><div class="desc">单个文件传输超过这个时间，状态条上出现"跳过"</div></div>
-        <div class="unit"><input type="number" id="st-skip" data-auto min="1" step="1" value="${st.skipAfter || 5}"><span>秒</span></div></div>
       <div class="srow"><div class="lbl"><b>位置</b><div class="desc">也可以直接拖动状态条，位置会被记住</div></div>
         <div class="seg" id="st-corner"><button data-corner="bottomLeft" class="${corner === 'bottomLeft' ? 'on' : ''}">左下角</button><button data-corner="bottomRight" class="${corner === 'bottomRight' ? 'on' : ''}">右下角</button></div></div>
     </div>
@@ -582,6 +620,11 @@
         <button class="btn" data-sys="log">打开</button></div>
       <div class="srow"><div class="lbl"><b>卸载 FolderSync</b><div class="desc">停止后台同步，删除开机启动项和命令行工具，并把应用移到废纸篓；配置和同步记录会保留</div></div>
         <button class="btn danger" data-sys="uninstall">卸载…</button></div>
+    </div>
+    <div class="section">关于</div>
+    <div class="group">
+      <div class="srow"><div class="lbl"><b>FolderSync v${esc(S.version || '—')}</b><div class="desc" id="upd-line">${esc(updStatus(S.update || {}))}</div></div>
+        <span id="upd-box"><button class="btn" data-a="check-update">检查更新</button></span></div>
     </div>`;
   }
 
@@ -637,18 +680,33 @@
     document.querySelectorAll('[data-auto]').forEach((el) => el.addEventListener('change', saveOverlay));
     document.querySelectorAll('[data-corner]').forEach((b) => b.addEventListener('click', () => {
       document.querySelectorAll('[data-corner]').forEach((x) => x.classList.toggle('on', x === b));
-      saveOverlay();
+      call('previewOverlay', { corner: b.dataset.corner });   // 在目标位置显示 2 秒状态条预览
+      saveOverlay(true);
     }));
   }
 
   // 状态条设置属于应用本身：改了立即生效
-  async function saveOverlay() {
+  async function saveOverlay(silent) {
     const on = $('[data-corner].on');
     await call('settings', { value: {
       overlayEnabled: $('#st-en').checked, overlayDelay: Math.max(0, parseFloat($('#st-delay').value) || 0),
-      skipAfter: Math.max(1, parseFloat($('#st-skip').value) || 5), overlayCorner: on ? on.dataset.corner : 'bottomRight' } });
-    toast('已保存');
+      overlayCorner: on ? on.dataset.corner : 'bottomRight' } });
+    if (!silent) toast('已保存');
   }
+  // 点击更新：从 GitHub 下载新版本、覆盖安装，应用随后自动重启
+  async function installUpdate(btn) {
+    const u = S.update || {};
+    if (u.installable === false) {
+      call('openURL', { url: 'https://github.com/terranc/folder-sync/releases/latest' });
+      toast('当前不是「应用程序」里的安装版，已打开下载页面');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    const r = await call('update', { action: 'install' });
+    if (r && r.state === 'failed') { toast(r.message || '更新失败'); verKey = ''; renderVersion(); }
+  }
+
+
 
   async function saveSync() {
     const g = S.global || {}, kv = [];
@@ -676,6 +734,8 @@
     if (t.dataset.go) { go(t.dataset.go); return; }
     const a = t.dataset.a;
     if (a === 'refresh') { call('refresh'); delete keys.hist; toast('已刷新'); return; }
+    if (a === 'check-update') { await call('update', { action: 'check' }); verKey = ''; renderVersion(); return; }
+    if (a === 'update') { await installUpdate(t); return; }
     if (a === 'expand') { call('expand', { route: route === 'rules' ? 'projects' : route }); return; }
     if (a === 'settings') { if (MODE === 'popover') call('expand', { route: 'settings' }); else go('settings'); return; }
     if (a === 'quit') { call('quit'); return; }
@@ -724,7 +784,8 @@
       const now = Date.now() / 1000, el = now - this.t0;
       return {
         daemon_running: true, autostart: true, now, config: '/Users/me/.config/folder-sync/config.conf', rsync: '/opt/homebrew/bin/rsync',
-        global: { debounce: '0.5', watch_ignore: '.git node_modules .idea .DS_Store' }, settings: { overlayDelay: 2, skipAfter: 5, overlayCorner: 'bottomRight', overlayEnabled: true },
+        version: '2.3.0', update: { state: params.get('update') === 'new' ? 'available' : 'latest', version: '2.3.1', current: '2.3.0', progress: 0, message: '', installable: params.get('update') !== 'local' },
+        global: { debounce: '0.5', watch_ignore: '.git node_modules .idea .DS_Store' }, settings: { overlayDelay: 2, overlayCorner: 'bottomRight', overlayEnabled: true },
         rules: [
           { name: 'pinme', enabled: true, valid: true, delete: false, local: '/Users/me/www/PinMe/meal.server', remote: '/data/www/pinme', host: 'pinme.example.com', user: 'deploy', port: '22', key_file: '', include: [], exclude: ['.git/**', 'runtime/**', 'vendor/**', 'storage/logs/**'], extra: '', remote_owner: '',
             run: { phase: 'transferring', trigger: 'full', percent: Math.min(99, Math.floor(el * 7) % 100), files_done: 132 + Math.floor(el), deleted: 0, speed_bps: 4404019, eta_s: 20, checked: 2140, check_total: 3150, current_file: 'public/assets/app.3f9c.js', current_started_at: now - 7, started_at: now - 30 }, last: null },
@@ -765,6 +826,13 @@
           : { ok: true, missing: '', install_cmd: '', rsync: { ok: true, version: 'rsync  version 3.5.1' }, fswatch: '/opt/homebrew/bin/fswatch', brew: '/opt/homebrew/bin/brew', app_location_ok: true };
       }
       if (msg.cmd === 'settings') res = this.state().settings;
+      if (msg.cmd === 'update') {
+        this.calls = (this.calls || []).concat(['update ' + (msg.action || 'check')]);
+        const u = Object.assign({}, this.state().update);
+        if (msg.action === 'install') { u.state = 'downloading'; u.progress = 0.12; }
+        res = u;
+      }
+      if (msg.cmd === 'previewOverlay') this.calls = (this.calls || []).concat(['previewOverlay ' + msg.corner]);
       setTimeout(() => window.__fsReply(msg.id, res), 30);
     },
   };

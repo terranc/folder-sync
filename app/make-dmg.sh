@@ -6,9 +6,10 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 UNIVERSAL=1 "$DIR/build.sh"
 APP="$DIR/build/FolderSync.app"
 # FS_VERSION：发布时用 tag 覆盖应用版本号（不写则沿用 Info.plist）
+# 只覆盖 CFBundleShortVersionString；CFBundleVersion（build）保留 Info.plist 里的递增整数，
+# 更新检查只比较版本号，build 仅作展示。
 if [ -n "${FS_VERSION:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $FS_VERSION" "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $FS_VERSION" "$APP/Contents/Info.plist"
   # 改过 Info.plist 后重新做 ad-hoc 签名，避免签名与包内容不一致
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 fi

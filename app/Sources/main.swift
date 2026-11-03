@@ -99,6 +99,12 @@ final class WebBridge: NSObject, WKScriptMessageHandler {
         case "settings":
             if let v = body["value"] as? [String: Any] { Settings.apply(v) }
             reply(wv, id, Settings.dict())
+        case "update":
+            if (body["action"] as? String) == "install" { Update.install() } else { Update.check(force: true) }
+            reply(wv, id, Update.dict())
+        case "previewOverlay":
+            if let c = body["corner"] as? String { app?.overlay.preview(corner: c) }
+            reply(wv, id, ["code": 0])
         case "doctor":
             CLI.runAsync(["doctor", "--json", "--app-path", Setup.appPath], timeout: 30) { [weak self] r in
                 if let d = r.out.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
@@ -208,10 +214,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         NSApp.servicesProvider = ServicesProvider()
         NSUpdateDynamicServices()
 
-        overlay.model.open = { [weak self] route in self?.openWindow(route: route) }
+        overlay.model.open = { [weak self] route in
+            if self?.overlay.isPreviewing == true { return }   // 预览条只是示意，不响应点击
+            self?.openWindow(route: route)
+        }
         StateStore.shared.listeners.append { [weak self] s in self?.stateChanged(s) }
         StateStore.shared.start()
         Setup.run(self)
+        Update.start()
         if let r = ProcessInfo.processInfo.environment["FS_DEBUG_OPEN"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.openWindow(route: r) }
         }
