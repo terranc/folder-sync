@@ -117,6 +117,7 @@ global_conf() {
 known_hosts = $TEST_TMP/known_hosts
 ssh_multiplex = false
 debounce = 0.2
+burst_full = 10
 interval = 300
 EOF
 }
@@ -366,6 +367,19 @@ check "trust-host writes the confirmed key to known_hosts" '[ "$result" -eq 0 ] 
 # ---------------------------------------------------------------- 守护：改动即推送 / 即时删除 / 自动重载
 if command -v fswatch >/dev/null 2>&1; then
   global_conf; rule live "$L/live" /live 'delete = true' 'exclude = runtime/**'; rule keep "$L/keep" /keep
+  rule gitlive "$L/gitlive" /gitlive
+  rule burst "$L/burst" /burst
+  # 准备一个两分支的 git 仓库：切分支时 HEAD/reflog 变化必须触发全量
+  git -C "$L/gitlive" init -q
+  git -C "$L/gitlive" config user.email tester@example.invalid
+  git -C "$L/gitlive" config user.name tester
+  echo base > "$L/gitlive/a.txt"
+  git -C "$L/gitlive" add -A && git -C "$L/gitlive" commit -qm base
+  GIT_BASE_BRANCH="$(git -C "$L/gitlive" symbolic-ref --short HEAD)"
+  git -C "$L/gitlive" checkout -qb other
+  echo other > "$L/gitlive/a.txt"; echo new > "$L/gitlive/b.txt"
+  git -C "$L/gitlive" add -A && git -C "$L/gitlive" commit -qm other
+  git -C "$L/gitlive" checkout -q "$GIT_BASE_BRANCH"
   echo gone > "$R/live/untouched-extra.txt"
   /bin/bash "$FS" daemon > "$TEST_TMP/daemon.out" 2>&1 &
   DP=$!
@@ -385,6 +399,18 @@ if command -v fswatch >/dev/null 2>&1; then
   mkdir -p "$L/live/runtime"; echo r > "$L/live/runtime/cache.txt"; echo ok > "$L/live/after.txt"
   wait_for "[ -f \"$R/live/after.txt\" ]" 80
   check "changes inside a rule-excluded dir are not pushed" '[ ! -f "$R/live/runtime/cache.txt" ]'
+
+  # 切分支：git 元数据变化应立即触发一次全量（不依赖逐文件事件）
+  : > "$RSYNC_CALLS"
+  git -C "$L/gitlive" checkout -q other
+  check "switching git branch triggers a full sync" 'wait_for "grep -q -- \"--no-inc-recursive\" \"$RSYNC_CALLS\"" 200'
+  check "branch switch pushes the new branch content" 'wait_content "$R/gitlive/a.txt" other 200 && [ -f "$R/gitlive/b.txt" ]'
+
+  # 大批量写入：短时间事件数超过 burst_full 时改走全量
+  : > "$RSYNC_CALLS"
+  for i in $(seq 1 30); do echo "b$i" > "$L/burst/f$i.txt"; done
+  check "a large batch switches to a full sync" 'wait_for "grep -q -- \"--no-inc-recursive\" \"$RSYNC_CALLS\"" 200'
+  check "the batch full sync pushes every file" 'wait_for "[ -f \"$R/burst/f30.txt\" ]" 200'
 
   # 连续快速写入同一个文件：最终远端必须是最后一次内容
   echo race1 > "$L/live/race.txt"; /bin/sleep 0.05

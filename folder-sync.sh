@@ -53,6 +53,10 @@ G_KNOWN_HOSTS="$HOME/.ssh/known_hosts"
 G_WATCH_IGNORE=".git node_modules .idea .vscode dist build .DS_Store"
 G_SSH_MULTIPLEX="true"
 G_SSH_PERSIST=600
+# 切分支（.git/HEAD / reflog 变化）时自动触发一次全量
+G_GIT_TRIGGER="true"
+# 2 秒内收到的事件数达到该值时改走全量；0 = 关闭
+G_BURST_FULL=100
 
 OPT_PROFILE=""
 OPT_DRY=0
@@ -196,6 +200,8 @@ read_global() {
       watch_ignore)  G_WATCH_IGNORE="$val" ;;
       ssh_multiplex) G_SSH_MULTIPLEX="$val" ;;
       ssh_persist)   G_SSH_PERSIST="$val" ;;
+      git_trigger)   if is_true "$val"; then G_GIT_TRIGGER="true"; else G_GIT_TRIGGER="false"; fi ;;
+      burst_full)    case "$val" in ''|*[!0-9]*) ;; *) G_BURST_FULL="$val" ;; esac ;;
       # interval / notify* / engine / fast_path 等旧字段：已不再使用，静默忽略
     esac
   done < "$CONFIG"
@@ -988,6 +994,7 @@ start_watcher() {
   (
     exec 3>&- 8>&- 9>&-
     trap 'exit 0' TERM INT
+    burst_n=0; burst_t0=0
     while :; do
       if [ -n "$WATCH_EX" ]; then
         fswatch -r --latency "$G_DEBOUNCE" --format '%f|%p' --event-flag-separator=, --exclude "$WATCH_EX" "$WATCH_ROOT"
@@ -1015,7 +1022,23 @@ start_watcher() {
         [ -s "$WATCH_GEN" ] && { IFS= read -r wgen < "$WATCH_GEN" || true; }
         case "$wgen" in ''|*[!0-9]*) wgen=0 ;; esac
         printf '%s\n' "$((wgen + 1))" > "$WATCH_GEN.tmp" && mv -f "$WATCH_GEN.tmp" "$WATCH_GEN"
+        # 短时间大量事件（整目录复制、批量生成文件等）：逐文件清单不可靠也低效，
+        # 直接丢弃清单并触发一次全量
+        burst_hit=0
+        if [ "${G_BURST_FULL:-0}" -gt 0 ] 2>/dev/null; then
+          if [ "$burst_n" -eq 0 ] || [ $((SECONDS - burst_t0)) -gt 2 ]; then
+            burst_n=1; burst_t0=$SECONDS
+          else
+            burst_n=$((burst_n + 1))
+          fi
+          if [ "$burst_n" -ge "$G_BURST_FULL" ]; then
+            : > "$WATCH_LIST"
+            burst_n=0; burst_t0=0
+            burst_hit=1
+          fi
+        fi
         exec 7>&-
+        [ "$burst_hit" = "1" ] && { send_event "full:$p" || true; }
       done
       wrc=${PIPESTATUS[0]:-0}
       case "$wrc" in 0|130|143) break ;; esac
@@ -1039,6 +1062,48 @@ start_watcher() {
     done
   ) &
   info "[$(ts)] 监听 [$p] $P_LOCAL"
+  start_git_watcher "$p" "$WATCH_ROOT" "$fifo"
+}
+
+# 监听 git 元数据：切分支 / merge / reset 等大范围改动会改写 .git/HEAD 和 reflog。
+# 事件到达后先等 git 释放 index 锁（checkout 更新工作区期间一直持有），
+# 再确认 1 秒内没有新一轮写入，才触发一次全量。
+start_git_watcher() {
+  local p="$1" root="$2" fifo="$3"
+  local head="$root/.git/HEAD" reflog="$root/.git/logs/HEAD" lock="$root/.git/index.lock"
+  [ "$G_GIT_TRIGGER" = "true" ] || return 0
+  case "$P_DIRECTION" in local|both) ;; *) return 0 ;; esac
+  [ -f "$head" ] || return 0
+  local paths=("$head")
+  [ -f "$reflog" ] && paths+=("$reflog")
+  (
+    exec 3>&- 8>&- 9>&-
+    trap 'exit 0' TERM INT
+    last_full=-100
+    while :; do
+      fswatch --latency "$G_DEBOUNCE" "${paths[@]}" 2>/dev/null | while IFS= read -r _; do
+        # 等 git 写完工作区；异常残留的锁最多等 10 轮 × 60 秒
+        tries=0
+        while [ "$tries" -lt 10 ]; do
+          wait_i=0
+          while [ -e "$lock" ] && [ "$wait_i" -lt 600 ]; do
+            /bin/sleep 0.1; wait_i=$((wait_i + 1))
+          done
+          /bin/sleep 1
+          [ -e "$lock" ] || break
+          tries=$((tries + 1))
+        done
+        # 一次切分支会同时改写 HEAD 和 reflog，3 秒内的重复事件只触发一次
+        [ $((SECONDS - last_full)) -lt 3 ] && continue
+        last_full=$SECONDS
+        send_event "full:$p" || true
+      done
+      wrc=${PIPESTATUS[0]:-0}
+      case "$wrc" in 0|130|143) break ;; esac
+      warn "[$p] .git 监听异常退出（退出码 ${wrc}），2 秒后重启"
+      /bin/sleep 2
+    done
+  ) &
 }
 
 cmd_daemon() {
@@ -1120,7 +1185,7 @@ cmd_daemon() {
   trap cleanup EXIT
 
   info "[$(ts)] 守护启动，规则:${profs:- （无）}"
-  info "[$(ts)] 改动即推送（去抖 ${G_DEBOUNCE} 秒）；不做定时 / 启动全量，全量请手动执行"
+  info "[$(ts)] 改动即推送（去抖 ${G_DEBOUNCE} 秒）；切分支或大批量改动自动全量；不做定时 / 启动全量"
 
   if command -v fswatch >/dev/null 2>&1; then
     local names="" name
@@ -1246,6 +1311,10 @@ debounce = 1
 known_hosts = ~/.ssh/known_hosts
 ssh_multiplex = true
 watch_ignore = .git node_modules .idea .vscode .DS_Store
+# 切分支（.git/HEAD / reflog 变化）时自动触发一次全量
+git_trigger = true
+# 2 秒内收到的事件数达到该值时改走全量；0 = 关闭
+burst_full = 100
 
 # 示例（去掉行首的 # 并改成自己的值后生效）：
 # [site]

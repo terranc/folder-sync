@@ -5,6 +5,7 @@ macOS 上的本地 → 远端单向推送工具。一个配置文件管理多个
 ![FolderSync 界面](docs/screenshot.png)
 
 - **改动即推送**：fswatch 监听本地改动，只把变化的文件交给 rsync（`--files-from`），不扫描整个目录。
+- **切分支 / 大批量改动自动全量**：`.git/HEAD` 或 reflog 变化（切分支、merge、reset）时，等 git 写完工作区后立即触发一次全量；2 秒内收到的文件事件达到阈值（默认 100，可配置）时也直接全量，不再依赖逐文件事件。
 - **不做定时或启动全量**：需要全量时，在项目卡片上点"全量同步"，或执行 `folder-sync sync <项目>`。
 - **只推不拉**：任何设置都不会删除本地文件。需要从远端拿文件时，手动"从远端下载"。
 - **同步删除远端文件**：每个项目一个开关，默认关闭。打开后，本地删除的文件会立即在远端删除；全量同步时远端多出的文件也会被删除。远端删除不进回收站、不可恢复；`exclude` 中的路径永远不会被删除。
@@ -74,6 +75,8 @@ debounce = 1                      # 本地改动去抖（秒）
 known_hosts = ~/.ssh/known_hosts  # 设为空会关闭主机指纹校验（不建议）
 ssh_multiplex = true
 watch_ignore = .git node_modules .idea .vscode .DS_Store
+git_trigger = true                # 切分支等 git 元数据变化时自动全量
+burst_full = 100                  # 2 秒内事件数达到该值时改走全量；0 = 关闭
 
 [site]
 enabled = true
