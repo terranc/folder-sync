@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-11-04
+
+### Added
+
+- 切分支、merge、reset 等 git 元数据变化后自动触发一次全量同步：等待 git 写完工作区并去抖，通常 2–4 秒内远端即可验证，不再依赖逐文件事件。
+- 2 秒内文件事件达到阈值（默认 100）时自动改走全量同步；阈值可用 `[global] burst_full` 调整，`0` 关闭。
+
+### Fixed
+
+- 修复切换分支后大量文件未同步、远端长期不一致的问题：逐文件事件丢失时不再需要手动执行全量同步来恢复。
+
 ## [2.4.0] - 2026-11-04
 
 ### Added

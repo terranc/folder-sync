@@ -144,13 +144,13 @@ async function openPage(query, width, height) {
   const p = await openPage('?mode=popover', 460, 640);
   check('浮层只有"项目""日志"两个标签', (await p.ev(`[...document.querySelectorAll('.tabs [data-go]')].map(b => b.textContent).join(',')`)) === '项目,日志');
   check('浮层卡片没有"复制"按钮', await p.ev(`!document.querySelector('[data-act="copy"]')`));
-  check('浮层底部显示当前版本号', (await p.ev(`(document.querySelector('#verline .ver') || {}).textContent`)) === 'v2.4.0');
+  check('浮层底部显示当前版本号', (await p.ev(`(document.querySelector('#verline .ver') || {}).textContent`)) === 'v2.4.1');
   check('没有新版本时不显示更新按钮', await p.ev(`!document.querySelector('#verline .upd')`));
   await p.shot('popover-version');
 
   // 有新版本：底部出现高亮更新按钮，点击调用安装
   const pu = await openPage('?mode=popover&update=new', 460, 640);
-  check('有新版本时显示更新按钮', (await pu.ev(`(document.querySelector('#verline .upd') || {}).textContent`)) === '更新到 2.4.1');
+  check('有新版本时显示更新按钮', (await pu.ev(`(document.querySelector('#verline .upd') || {}).textContent`)) === '更新到 2.4.2');
   check('更新按钮在小窗底部靠右、位于"退出"左侧', await pu.ev(`(() => {
     const up = document.querySelector('#verline .upd'), quit = document.querySelector('[data-a="quit"]').getBoundingClientRect();
     if (!up) return false;
@@ -164,7 +164,7 @@ async function openPage(query, width, height) {
   // ---------------- 设置页：版本号 / 检查更新 / 位置预览 ----------------
   const s2 = await openPage('?mode=window&route=settings&update=new', 1000, 1400);
   check('设置页不再有"跳过"按钮出现时机', await s2.ev(`!document.getElementById('st-skip')`));
-  check('设置页"关于"显示版本号', (await s2.ev(`[...document.querySelectorAll('.srow b')].map(b => b.textContent).find(t => t.startsWith('FolderSync v'))`)) === 'FolderSync v2.4.0');
+  check('设置页"关于"显示版本号', (await s2.ev(`[...document.querySelectorAll('.srow b')].map(b => b.textContent).find(t => t.startsWith('FolderSync v'))`)) === 'FolderSync v2.4.1');
   check('设置页有检查更新入口', await s2.ev(`!!document.querySelector('[data-a="check-update"]') || !!document.querySelector('[data-a="update"]')`));
   await s2.ev(`document.querySelector('[data-corner="bottomLeft"]').click()`);
   await sleep(120);
