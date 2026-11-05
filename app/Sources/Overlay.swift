@@ -70,7 +70,7 @@ struct OverlayRowView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(hover ? 1 : (row.kind == .failed ? 0.82 : 0.35))))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(hover ? 1 : (row.kind == .failed ? 0.82 : 0.7))))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(row.kind == .failed ? tint.opacity(0.7) : Color.white.opacity(0.08), lineWidth: 1))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
