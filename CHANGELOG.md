@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4] - 2026-11-05
+
+### Changed
+
+- 检测到的新版本会写入本地缓存：再次打开小窗时直接显示更新提示，后台检查过程中不再出现「先无更新、后出现更新」的闪烁；更新到最新版后提示才会消失。
+- 打开管理窗口不再自动检测更新，可在「设置 → 关于」手动点击「检查更新」。
+
+### Fixed
+
+- 网络检查失败时不再清掉已缓存的新版本提示。
+
 ## [2.4.3] - 2026-11-05
 
 ### Changed
