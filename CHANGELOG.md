@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3] - 2026-11-05
+
+### Changed
+
+- 每次打开菜单栏小窗或管理窗口时都会检查一次更新，不再只依赖启动时和每 6 小时的定时检查。
+- 设置页「检查更新」按钮点击后显示「检测中…」并禁用，检查结束前无法重复点击。
+
 ## [2.4.2] - 2026-11-05
 
 ### Fixed
