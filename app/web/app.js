@@ -186,7 +186,7 @@
     if (u.state === 'available') return `有新版本 ${u.version} 可用`;
     if (u.state === 'latest') return '已是最新版本';
     if (u.state === 'failed') return `检查更新失败：${u.message || '未知原因'}`;
-    return '自动检查更新（每 6 小时一次）';
+    return '每次打开窗口时自动检查更新';
   }
   // 小窗底部：版本号常驻，有新版本时版本号左侧出现高亮更新按钮
   function renderVersion() {
@@ -197,7 +197,9 @@
     const box = $('#verline');
     if (box) box.innerHTML = updButtonHTML() + `<span class="ver" title="当前版本">v${esc(S.version || '')}</span>`;
     const ub = $('#upd-box');
-    if (ub) ub.innerHTML = updButtonHTML() || '<button class="btn" data-a="check-update">检查更新</button>';
+    if (ub) ub.innerHTML = updButtonHTML() || (u.state === 'checking'
+      ? '<button class="btn" disabled>检测中…</button>'
+      : '<button class="btn" data-a="check-update">检查更新</button>');
   }
 
 
@@ -779,7 +781,13 @@
     if (t.dataset.go) { go(t.dataset.go); return; }
     const a = t.dataset.a;
     if (a === 'refresh') { call('refresh'); delete keys.hist; toast('已刷新'); return; }
-    if (a === 'check-update') { await call('update', { action: 'check' }); verKey = ''; renderVersion(); return; }
+    if (a === 'check-update') {
+      t.disabled = true; t.textContent = '检测中…';
+      const r = await call('update', { action: 'check' });
+      if (r) S.update = r;
+      verKey = ''; renderVersion();
+      return;
+    }
     if (a === 'update') { await installUpdate(t); return; }
     if (a === 'expand') { call('expand', { route: route === 'rules' ? 'projects' : route }); return; }
     if (a === 'settings') { if (MODE === 'popover') call('expand', { route: 'settings' }); else go('settings'); return; }
