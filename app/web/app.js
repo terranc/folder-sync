@@ -180,7 +180,7 @@
     return `<button class="upd" data-a="update" title="从 GitHub 下载新版本并覆盖安装，完成后自动重启"${busy ? ' disabled' : ''}>${ico('refresh')}<span>${esc(label)}</span></button>`;
   }
   function updStatus(u) {
-    if (u.state === 'checking') return '正在检查更新…';
+    if (u.checking) return '正在检查更新…';
     if (u.state === 'downloading') return `正在下载更新 ${Math.round((u.progress || 0) * 100)}%`;
     if (u.state === 'installing') return '正在安装，应用即将重启…';
     if (u.state === 'available') return `有新版本 ${u.version} 可用`;
@@ -191,13 +191,13 @@
   // 小窗底部：版本号常驻，有新版本时版本号左侧出现高亮更新按钮
   function renderVersion() {
     const u = S.update || {};
-    const key = [S.version, u.state, u.version, u.progress, u.message].join('|');
+    const key = [S.version, u.state, u.checking, u.version, u.progress, u.message].join('|');
     if (key === verKey) return;
     verKey = key;
     const box = $('#verline');
     if (box) box.innerHTML = updButtonHTML() + `<span class="ver" title="当前版本">v${esc(S.version || '')}</span>`;
     const ub = $('#upd-box');
-    if (ub) ub.innerHTML = updButtonHTML() || (u.state === 'checking'
+    if (ub) ub.innerHTML = updButtonHTML() || (u.checking
       ? '<button class="btn" disabled>检测中…</button>'
       : '<button class="btn" data-a="check-update">检查更新</button>');
   }

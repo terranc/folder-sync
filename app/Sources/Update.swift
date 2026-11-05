@@ -12,8 +12,10 @@ enum Update {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 
-    /// idle / checking / latest / available / downloading / installing / failed
+    /// idle / latest / available / downloading / installing / failed
     private(set) static var state = "idle"
+    /// 是否正在请求远端；与 state 分开，避免检查期间把已缓存的新版本提示收起来
+    private(set) static var checking = false
     private(set) static var progress: Double = 0
     private(set) static var message = ""
     private(set) static var newVersion = ""
@@ -25,6 +27,8 @@ enum Update {
 
     private static let checkInterval: TimeInterval = 6 * 3600
     private static let defaultsKey = "lastUpdateCheck"
+    private static let availableVersionKey = "updateAvailableVersion"
+    private static let availableAssetKey = "updateAvailableAsset"
 
     /// 安装目标：默认就是正在运行的 .app；测试时用 FOLDER_SYNC_UPDATE_TARGET 指向一次性副本，
     /// 这样验证下载 / 覆盖流程不会动到真正的「应用程序」
@@ -41,7 +45,7 @@ enum Update {
     }
 
     static func dict() -> [String: Any] {
-        ["state": state, "version": newVersion, "current": version, "progress": progress,
+        ["state": state, "checking": checking, "version": newVersion, "current": version, "progress": progress,
          "message": message, "installable": installable, "checked_at": checkedAt]
     }
 
@@ -50,6 +54,7 @@ enum Update {
     static func start() {
         cleanStaleWorkdirs()
         guard !CLI.isolated else { return }
+        restoreCachedUpdate()
         checkedAt = UserDefaults.standard.double(forKey: defaultsKey)
         if Date().timeIntervalSince1970 - checkedAt > checkInterval {
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { check(force: false) }
@@ -67,10 +72,39 @@ enum Update {
         }
     }
 
+    // MARK: - 新版本缓存
+
+    /// 启动时先按上次检测结果展示，避免打开小窗后才出现「有新版本」的闪烁
+    private static func restoreCachedUpdate() {
+        let d = UserDefaults.standard
+        let v = d.string(forKey: availableVersionKey) ?? ""
+        let a = d.string(forKey: availableAssetKey) ?? ""
+        guard !v.isEmpty, !a.isEmpty else { return }
+        guard compare(v, version) > 0 else {
+            clearCachedUpdate()
+            return
+        }
+        newVersion = v
+        assetURL = a
+        state = "available"
+    }
+
+    private static func cacheAvailable() {
+        let d = UserDefaults.standard
+        d.set(newVersion, forKey: availableVersionKey)
+        d.set(assetURL, forKey: availableAssetKey)
+    }
+
+    private static func clearCachedUpdate() {
+        let d = UserDefaults.standard
+        d.removeObject(forKey: availableVersionKey)
+        d.removeObject(forKey: availableAssetKey)
+    }
+
     static func check(force: Bool) {
-        guard state != "checking", state != "downloading", state != "installing" else { return }
+        guard !checking, state != "downloading", state != "installing" else { return }
         if !force, Date().timeIntervalSince1970 - checkedAt < 600 { return }
-        state = "checking"
+        checking = true
         message = ""
         tick()
         apiLatest { latest, asset in
@@ -112,11 +146,17 @@ enum Update {
 
     private static func apply(_ latest: String?, _ asset: String?) {
         DispatchQueue.main.async {
+            checking = false
             checkedAt = Date().timeIntervalSince1970
             UserDefaults.standard.set(checkedAt, forKey: defaultsKey)
+            // 下载/安装期间忽略迟到的检查结果，避免覆盖进度界面
+            guard state != "downloading", state != "installing" else { tick(); return }
             guard let latest = latest else {
-                state = "failed"
-                message = "无法获取更新信息（网络不可用或 GitHub 拒绝访问）"
+                // 已有缓存的新版本时保留提示，网络失败不收回
+                if state != "available" {
+                    state = "failed"
+                    message = "无法获取更新信息（网络不可用或 GitHub 拒绝访问）"
+                }
                 tick()
                 return
             }
@@ -124,8 +164,10 @@ enum Update {
             assetURL = asset ?? ""
             if !assetURL.isEmpty, compare(latest, version) > 0 {
                 state = "available"
+                cacheAvailable()
             } else {
                 state = "latest"
+                clearCachedUpdate()
             }
             message = ""
             tick()

@@ -422,7 +422,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { wv.evaluateJavaScript(js, completionHandler: nil) }
         }
         bridge.pushState()
-        Update.check(force: true)
     }
 
     /// 红黄绿按钮：离边框更远，并在 52pt 高的顶部栏里垂直居中（与侧边栏的 logo、应用名对齐）
