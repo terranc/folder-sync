@@ -188,6 +188,28 @@ echo z > "$L/ex/workerman/new.php"; : > "$RSYNC_CALLS"
 run push "$L/ex/workerman/new.php"
 check "manual push still honors exclude" '[ ! -f "$R/ex/workerman/new.php" ]'
 
+# ---------------------------------------------------------------- mirror（同步到云端）
+global_conf; rule mir "$L/mir" /mir 'enabled = false' 'delete = false' 'exclude = keep/**'
+mkdir -p "$L/mir/sub" "$R/mir/sub" "$R/mir/keep"
+echo new > "$L/mir/sub/new.txt"; echo old > "$R/mir/sub/old.txt"
+echo k > "$R/mir/keep/k.txt"; echo stale > "$R/mir/root-only.txt"
+: > "$RSYNC_CALLS"; run mirror "$L/mir"
+check "mirror uploads and deletes remote extras regardless of enabled/delete" \
+  '[ "$result" -eq 0 ] && [ -f "$R/mir/sub/new.txt" ] && [ ! -f "$R/mir/sub/old.txt" ] && [ ! -f "$R/mir/root-only.txt" ]'
+check "mirror still protects excluded remote paths" '[ -f "$R/mir/keep/k.txt" ]'
+check "mirror uses files-from together with delete" \
+  'grep -q -- "--files-from" "$RSYNC_CALLS" && grep -Eq -- "(^| )--delete( |$)" "$RSYNC_CALLS"'
+
+echo old2 > "$R/mir/sub/old2.txt"; echo keeproot > "$R/mir/root2.txt"
+run mirror "$L/mir/sub"
+check "mirror limits deletion to the selected folder" \
+  '[ "$result" -eq 0 ] && [ ! -f "$R/mir/sub/old2.txt" ] && [ -f "$R/mir/root2.txt" ]'
+
+global_conf; rule rroot "$L/rroot" /
+run mirror "$L/rroot"
+check "mirror refuses a rule whose remote is the root directory" \
+  '[ "$result" -ne 0 ] && contains "不能同步到云端"'
+
 # ---------------------------------------------------------------- 失败 / ack
 global_conf; rule site "$L/site" /site
 RSYNC_STUB_FAIL=12 run sync site

@@ -56,7 +56,7 @@
     return (dt.getMonth() + 1) + '月' + dt.getDate() + '日 ' + String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
   }
   const speed = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB/s' : Math.round((b || 0) / 1024) + ' KB/s';
-  const TRIG = { change: '推送改动', full: '全量同步', push: '上传', pull: '下载', preview: '预览' };
+  const TRIG = { change: '推送改动', full: '全量同步', push: '上传', mirror: '同步到云端', pull: '下载', preview: '预览' };
   function toast(msg) {
     const t = $('#toast'); t.textContent = msg; t.classList.add('on');
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2600);
@@ -170,7 +170,7 @@
   function updLabel(u) {
     if (u.state === 'downloading') return `下载中 ${Math.round((u.progress || 0) * 100)}%`;
     if (u.state === 'installing') return '正在安装…';
-    if (u.state === 'available') return `更新到 ${u.version}`;
+    if (u.state === 'available') return '更新';
     return '';
   }
   function updButtonHTML() {

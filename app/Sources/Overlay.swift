@@ -181,7 +181,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 let runId = r["run_id"] as? String ?? ""
                 let started = r["started_at"] as? Double ?? now
                 let trigger = r["trigger"] as? String ?? "change"
-                let manual = ["full", "push", "pull"].contains(trigger)
+                let manual = ["full", "push", "mirror", "pull"].contains(trigger)
                 guard manual || shownRuns.contains(runId) || now - started >= Settings.overlayDelay else { continue }
                 shownRuns.insert(runId)
                 let phase = r["phase"] as? String ?? ""
@@ -191,7 +191,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 let cur = r["current_file"] as? String ?? ""
                 let curStart = r["current_started_at"] as? Double ?? 0
                 let checked = r["checked"] as? Int ?? 0, total = r["check_total"] as? Int ?? 0
-                let verb: String = ["full": "全量同步", "push": "上传", "pull": "下载"][trigger] ?? "推送"
+                let verb: String = ["full": "全量同步", "push": "上传", "mirror": "同步到云端", "pull": "下载"][trigger] ?? "推送"
                 var detail: String
                 switch phase {
                 case "connecting": detail = "\(verb) · 连接中…"

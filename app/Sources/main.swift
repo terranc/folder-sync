@@ -542,6 +542,26 @@ final class ServicesProvider: NSObject {
             }
         }
     }
+
+    @objc func syncToCloud(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        let ps = paths(pboard)
+        guard !ps.isEmpty else { return }
+        let names = ps.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: "、")
+        let more = ps.count > 3 ? " 等 \(ps.count) 项" : ""
+        let text = "将把「\(names)」\(more)上传到云端，并删除远端对应文件夹里本地已不存在的文件。\n\n"
+            + "此操作会永久删除远端文件，且不受该项目的同步开关和删除设置影响；项目排除规则仍然生效。"
+        guard alert("同步到云端？", text, buttons: ["同步", "取消"]) == .alertFirstButtonReturn else { return }
+        CLI.runAsync(["mirror", "--no-wait", "--"] + ps, timeout: 3600) { r in
+            if r.code != 0 && r.code != 75 {
+                let msg = (r.err + r.out).trimmingCharacters(in: .whitespacesAndNewlines)
+                if msg.contains("不属于任何同步规则") || msg.contains("不同规则") || msg.contains("根目录") {
+                    _ = self.alert("无法同步到云端", msg)
+                }
+            } else if r.code == 75 {
+                _ = self.alert("该项目正在同步", "请等当前同步结束后再同步，或先在状态条上停止。")
+            }
+        }
+    }
 }
 
 // ============================== 入口 ==============================

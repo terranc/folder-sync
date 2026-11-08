@@ -620,6 +620,7 @@ term_progress_loop() {
 # 执行一条规则的一次同步。
 #   run_rule <规则> <trigger> [清单文件]
 #   trigger: change（监听到改动，只推清单）| full（全量）| push（手动推清单）
+#            | mirror（手动镜像清单：上传并删除所选目录内远端多余文件）
 #            | pull（从远端下载清单里的路径）| preview（pull 预演，只列出变化）
 # 返回: 0 成功 / 130 已停止 / 75 规则正忙（--no-wait）/ 其他 = 失败
 # ------------------------------------------------------------------------------
@@ -627,6 +628,9 @@ run_rule() {
   local prof="$1" trigger="$2" list="${3:-}"
   load_profile "$prof"
   validate_profile "$prof"
+  # 镜像会删除远端多余文件，remote 指向根目录时绝不执行（不受项目 delete 开关影响）
+  [ "$trigger" = "mirror" ] && [ "$P_REMOTE" = "/" ] &&
+    die "[$prof] remote 指向根目录，不能同步到云端（会删除远端多余文件）"
   ensure_dirs
   build_rsync_rules
   rm -rf "$PATDIR" 2>/dev/null || true
@@ -696,6 +700,11 @@ run_rule() {
       # --checksum：rsync 默认只看 size + 整秒 mtime，同一秒内改写且大小不变会被误判为未变化
       if [ "$P_DELETE" = "true" ]; then args+=( --delete-missing-args ); else args+=( --ignore-missing-args ); fi
       ;;
+    mirror)
+      # 手动"同步到云端"：无论项目是否启用、delete 是否勾选，都删除所选目录内的远端多余文件。
+      # --delete 与 --files-from 同用时，删除范围限制在清单列出的目录内，不会波及其他目录。
+      args+=( "--files-from=$flist" --checksum --delete --delete-missing-args )
+      ;;
     pull)    args+=( "--files-from=$flist" --ignore-missing-args ) ;;
     preview) args+=( "--files-from=$flist" --ignore-missing-args --dry-run ) ;;
   esac
@@ -708,6 +717,7 @@ run_rule() {
     change)  verb="推送 ${nfiles} 个改动" ;;
     full)    verb="全量同步" ;;
     push)    verb="上传 ${nfiles} 项" ;;
+    mirror)  verb="同步到云端 ${nfiles} 项" ;;
     pull)    verb="从远端下载 ${nfiles} 项" ;;
     preview) verb="下载预览" ;;
   esac
@@ -777,7 +787,7 @@ run_rule() {
     [ "$rc" -eq 24 ] && rc=0
     if [ "$cancelled" = 1 ]; then rc=130; break; fi
     if [ "$restart" = 1 ]; then
-      case "$trigger" in change|push|pull) [ -s "$flist" ] || { rc=0; break; } ;; esac
+      case "$trigger" in change|push|mirror|pull) [ -s "$flist" ] || { rc=0; break; } ;; esac
       continue
     fi
     if [ "$rc" -eq 255 ] && [ "$attempt" -lt 3 ] && [ "$trigger" != "preview" ] &&
@@ -1455,6 +1465,18 @@ cmd_push() {
   paths_to_list "$listf"
   local rc=0
   set +e; ( run_rule "$RULE_OF_PATHS" push "$listf" ); rc=$?; set -e
+  rm -f "$listf"
+  return "$rc"
+}
+
+# 同步到云端：上传所选路径，并删除所选文件夹内"远端有、本地没有"的文件。
+# 强制镜像，不受项目 enabled / delete 设置影响；include/exclude 规则仍然生效。
+cmd_mirror() {
+  read_global; need_tools; ensure_dirs
+  local listf; listf="$(mktemp "$STATE/push.XXXXXX")"
+  paths_to_list "$listf"
+  local rc=0
+  set +e; ( run_rule "$RULE_OF_PATHS" mirror "$listf" ); rc=$?; set -e
   rm -f "$listf"
   return "$rc"
 }
@@ -2245,6 +2267,8 @@ $APP —— 本地 → 远端单向推送（SSH + GNU rsync）
 同步:
   sync [规则|路径|.]       手动全量同步（不给参数 = 所有启用的规则）；--bg 交给守护后台执行
   push <路径...>          立即上传选中的文件/文件夹
+  mirror <路径...>        同步到云端：上传选中的文件夹，并删除其中远端有、本地没有的文件
+                          （强制镜像，不受项目 enabled / delete 设置影响；排除规则仍生效）
   pull <路径...>          从远端下载（先列出将新增/覆盖的本地文件，确认后执行；不删本地文件）
                           --preview 只输出 JSON 预览；--yes 跳过确认
   cancel [规则]           停止正在进行的同步（未传完的丢弃）
@@ -2316,6 +2340,7 @@ case "$CMD" in
   check)       cmd_check ;;
   sync)        cmd_sync ;;
   push)        cmd_push ;;
+  mirror)      cmd_mirror ;;
   pull)        cmd_pull ;;
   cancel|stop) cmd_cancel ;;
   skip)        cmd_skip ;;
