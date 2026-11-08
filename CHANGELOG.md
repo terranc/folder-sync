@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-11-08
+
+### Added
+
+- Finder 快速操作新增「同步到云端」：对选中的文件夹做镜像同步，上传本地内容并删除其中「远端有、本地没有」的文件，执行前会二次确认。
+- 新增 `folder-sync mirror <路径...>` 命令：强制镜像，不受项目 `enabled` / `delete` 设置影响；项目的排除 / 仅包含规则仍然生效，被排除的远端文件不会被删除；`remote` 指向根目录的规则会被拒绝执行。
+
 ## [2.4.4] - 2026-11-05
 
 ### Changed
