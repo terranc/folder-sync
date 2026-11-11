@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-11-11
+
+### Added
+
+- 支持按文件夹单独开启同步删除：项目级「同步删除」关闭时，可用 `delete_paths` 指定路径（支持 `*` 匹配一层、`**` 匹配多层），这些路径内的本地删除会同步删除远端文件；手动全量同步也会清理这些路径内的远端多余文件，范围外保持不变。
+- 项目编辑页新增「额外同步删除的路径」，并为排除 / 仅包含 / 删除路径输入框提供示例占位。
+- 项目卡片对仅配置了删除路径的项目显示「部分删除」。
+
+### Changed
+
+- 「排除 / 仅包含」改为标签页，减少编辑表单长度。
+
+### Fixed
+
+- 更新按钮显示具体目标版本号（如「更新到 2.6.0」），不再只显示「更新」。
+- 排除规则对全量删除和增量删除都生效；`delete_paths` 中的字面量方括号不会被 rsync 当成字符类而扩大删除范围。
+
 ## [2.5.0] - 2026-11-08
 
 ### Added
