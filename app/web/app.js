@@ -68,7 +68,7 @@
   const runKey = (r) => r ? [r.phase, r.trigger, r.percent, r.files_done, r.deleted, r.speed_bps, r.current_file, r.checked, r.check_total, r.eta_s,
     r.current_started_at ? Math.floor((S.now - r.current_started_at) / 1) : 0].join('|') : '';
   const lastKey = (l) => l ? [l.run_id, l.result, l.acked, l.summary].join('|') : '';
-  const ruleKey = (r) => [r.name, r.enabled, r.valid, r.delete, r.local, r.remote, r.host, r.user, r.error, runKey(r.run), lastKey(r.last)].join('§');
+  const ruleKey = (r) => [r.name, r.enabled, r.valid, r.delete, (r.delete_paths || []).join(','), r.local, r.remote, r.host, r.user, r.error, runKey(r.run), lastKey(r.last)].join('§');
   function ruleDot(r) {
     if (r.run) return 'run';
     if (r.last && r.last.result === 'failed' && !r.last.acked) return 'bad';
@@ -170,7 +170,7 @@
   function updLabel(u) {
     if (u.state === 'downloading') return `下载中 ${Math.round((u.progress || 0) * 100)}%`;
     if (u.state === 'installing') return '正在安装…';
-    if (u.state === 'available') return '更新';
+    if (u.state === 'available') return `更新到 ${u.version}`;
     return '';
   }
   function updButtonHTML() {
@@ -294,7 +294,7 @@
     return `<div class="card ${failed ? 'failed' : ''} ${r.enabled ? '' : 'disabled'}" data-rule="${esc(r.name)}">
       <div class="row"><span class="name ${detail ? '' : 'click'}" ${detail ? '' : 'data-act="edit"'}>${esc(r.name)}</span>
         ${r.enabled ? '' : '<span class="badge">已停用</span>'}
-        ${r.delete ? '<span class="badge del">同步删除</span>' : ''}
+        ${r.delete ? '<span class="badge del">同步删除</span>' : ((r.delete_paths || []).length ? '<span class="badge del">部分删除</span>' : '')}
         ${r.valid ? '' : '<span class="badge del" title="' + esc(r.error) + '">配置有误</span>'}
       </div>
       <div class="path" title="${esc(r.local)} → ${esc(r.user)}@${esc(r.host)}:${esc(r.remote)}">${esc(home(r.local))} → ${esc(r.user)}@${esc(r.host)}:${esc(r.remote)}</div>
@@ -313,10 +313,17 @@
   }
 
   // ---------------- 编辑表单 ----------------
+  // 匹配符输入框的示例：按 React / Go 项目常见目录预设，用 &#10; 表示换行
+  const PATTERN_PLACEHOLDER = {
+    exclude: 'node_modules/**&#10;dist/**&#10;.next/**&#10;vendor/**&#10;*.log',
+    include: '*.php&#10;img/**',
+    delete_paths: 'uploads&#10;runtime/**',
+  };
+
   function editorHTML(r, prefill) {
     const isNew = !r;
     if (isNew && prefill) r = Object.assign({}, prefill, { name: prefill.name + '-copy', run: null, last: null });
-    r = r || { name: '', enabled: true, local: '', remote: '', host: '', port: '22', user: '', key_file: '', delete: false, include: [], exclude: ['.git/**', 'node_modules/**', '.DS_Store'], extra: '', remote_owner: '' };
+    r = r || { name: '', enabled: true, local: '', remote: '', host: '', port: '22', user: '', key_file: '', delete: false, include: [], exclude: ['.git/**', 'node_modules/**', '.DS_Store'], delete_paths: [], extra: '', remote_owner: '' };
     return `<form class="editor card" onsubmit="return false">
       <div id="ed-err"></div>
       <div class="field"><label>名称</label><input type="text" name="name" value="${esc(r.name)}" placeholder="字母、数字、. _ -"></div>
@@ -329,10 +336,17 @@
       </div>
       <div class="field"><label>远端目录（绝对路径）</label><input type="text" name="remote" value="${esc(r.remote)}"></div>
       <div class="field"><label>SSH 私钥</label><div class="inline"><input type="text" name="key_file" value="${esc(r.key_file)}" placeholder="留空则使用 ssh-agent"><button class="btn" type="button" data-pick="file">选择…</button></div></div>
+      <div class="field">
+        <div class="tabs pattern-tabs" role="tablist" aria-label="文件匹配规则">
+          <button class="on" type="button" id="ed-tab-exclude" data-pattern-tab="exclude" role="tab" aria-selected="true" aria-controls="ed-panel-exclude">排除</button>
+          <button type="button" id="ed-tab-include" data-pattern-tab="include" role="tab" aria-selected="false" aria-controls="ed-panel-include">仅包含</button>
+        </div>
+        <div id="ed-panel-exclude" role="tabpanel" aria-labelledby="ed-tab-exclude"><textarea name="exclude" aria-label="排除（每行一项）" spellcheck="false" placeholder="${PATTERN_PLACEHOLDER.exclude}">${esc((r.exclude || []).join('\n'))}</textarea><div class="hint">* 匹配一层，** 匹配多层，例如 .git/**、*.log、runtime/**</div></div>
+        <div id="ed-panel-include" role="tabpanel" aria-labelledby="ed-tab-include" hidden><textarea name="include" aria-label="仅包含（每行一项）" spellcheck="false" placeholder="${PATTERN_PLACEHOLDER.include}">${esc((r.include || []).join('\n'))}</textarea><div class="hint">填写后只同步匹配的文件，可与“排除”规则同时生效</div></div>
+      </div>
       <div class="field switch"><input type="checkbox" name="delete" id="ed-del" ${r.delete ? 'checked' : ''}><label for="ed-del">同步删除远端文件</label></div>
-      <div class="warnbox" id="ed-delwarn" style="display:${r.delete ? 'block' : 'none'}">开启后：本地删除的文件会立即在远端删除；手动全量同步时远端多出的文件也会被删除。远端删除不可恢复；下方"排除"里的路径永远不会被删除。</div>
-      <div class="field"><label>排除（每行一项）</label><textarea name="exclude" spellcheck="false">${esc((r.exclude || []).join('\n'))}</textarea><div class="hint">* 匹配一层，** 匹配多层，例如 .git/**、*.log、runtime/**</div></div>
-      <div class="field"><label>仅包含（可选，每行一项）</label><textarea name="include" spellcheck="false">${esc((r.include || []).join('\n'))}</textarea><div class="hint">填写后只同步匹配的文件</div></div>
+      <div class="warnbox" id="ed-delwarn" style="display:${r.delete ? 'block' : 'none'}">开启后：本地删除的文件会立即在远端删除；手动全量同步时远端多出的文件也会被删除。远端删除不可恢复；上方"排除"里的路径永远不会被删除。</div>
+      <div class="field" id="ed-delpaths" style="display:${r.delete ? 'none' : 'block'}"><label>额外同步删除的路径（可选，每行一项）</label><textarea name="delete_paths" spellcheck="false" placeholder="${PATTERN_PLACEHOLDER.delete_paths}">${esc((r.delete_paths || []).join('\n'))}</textarea><div class="hint">未开启"同步删除"时，仅这些路径内本地删除的文件会同步删除远端。相对项目根目录；* 匹配一层，** 匹配多层，例如 uploads、runtime/**。</div></div>
       <div class="cols" style="grid-template-columns:1fr 1fr">
         <div class="field"><label>远端属主（可选）</label><input type="text" name="remote_owner" value="${esc(r.remote_owner)}" placeholder="www:www"></div>
         <div class="field"><label>附加 rsync 参数（可选）</label><input type="text" name="extra" value="${esc(r.extra)}"></div>
@@ -365,6 +379,7 @@
         enabled: f.elements.enabled.checked ? 'true' : 'false', local: v('local'), remote: v('remote'), host: v('host'),
         port: v('port') === '22' ? '' : v('port'), user: v('user'), key_file: v('key_file'),
         delete: f.elements.delete.checked ? 'true' : 'false', exclude: list('exclude'), include: list('include'),
+        delete_paths: list('delete_paths'),
         remote_owner: v('remote_owner'), extra: v('extra'),
       },
     };
@@ -375,7 +390,21 @@
     if (!f) return;
     const err = (msg) => { $('#ed-err').innerHTML = msg ? `<div class="errbox">${esc(msg)}</div>` : ''; };
     f.querySelectorAll('textarea').forEach((t) => { autoGrow(t); t.addEventListener('input', () => autoGrow(t)); });
-    f.elements.delete.addEventListener('change', (e) => { $('#ed-delwarn').style.display = e.target.checked ? 'block' : 'none'; });
+    f.querySelectorAll('[data-pattern-tab]').forEach((b) => b.addEventListener('click', () => {
+      const name = b.dataset.patternTab;
+      f.querySelectorAll('[data-pattern-tab]').forEach((tab) => {
+        tab.classList.toggle('on', tab === b);
+        tab.setAttribute('aria-selected', tab === b ? 'true' : 'false');
+      });
+      $('#ed-panel-exclude').hidden = name !== 'exclude';
+      $('#ed-panel-include').hidden = name !== 'include';
+      autoGrow(f.elements[name]);
+    }));
+    f.elements.delete.addEventListener('change', (e) => {
+      const on = e.target.checked;
+      $('#ed-delwarn').style.display = on ? 'block' : 'none';
+      $('#ed-delpaths').style.display = on ? 'none' : 'block';
+    });
     f.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', async () => {
       const folder = b.dataset.pick === 'folder';
       const r = await call(folder ? 'chooseFolder' : 'chooseFile', { start: f.elements.local.value });
@@ -842,7 +871,7 @@
         version: '2.4.1', update: { state: params.get('update') === 'new' ? 'available' : 'latest', version: '2.4.2', current: '2.4.1', progress: 0, message: '', installable: params.get('update') !== 'local' },
         global: { debounce: '0.5', watch_ignore: '.git node_modules .idea .DS_Store' }, settings: this._settings || { overlayDelay: 2, overlayCorner: 'bottomRight', overlayEnabled: true },
         rules: [
-          { name: 'pinme', enabled: true, valid: true, delete: false, local: '/Users/me/www/PinMe/meal.server', remote: '/data/www/pinme', host: 'pinme.example.com', user: 'deploy', port: '22', key_file: '', include: [], exclude: ['.git/**', 'runtime/**', 'vendor/**', 'storage/logs/**'], extra: '', remote_owner: '',
+          { name: 'pinme', enabled: true, valid: true, delete: false, local: '/Users/me/www/PinMe/meal.server', remote: '/data/www/pinme', host: 'pinme.example.com', user: 'deploy', port: '22', key_file: '', include: [], exclude: ['.git/**', 'runtime/**', 'vendor/**', 'storage/logs/**'], delete_paths: ['public/assets'], extra: '', remote_owner: '',
             run: { phase: 'transferring', trigger: 'full', percent: Math.min(99, Math.floor(el * 7) % 100), files_done: 132 + Math.floor(el), deleted: 0, speed_bps: 4404019, eta_s: 20, checked: 2140, check_total: 3150, current_file: 'public/assets/app.3f9c.js', current_started_at: now - 7, started_at: now - 30 }, last: null },
           { name: 'youxiang', enabled: true, valid: true, delete: true, local: '/Users/me/www/youxiang', remote: '/var/www/youxiang', host: 'yx.example.com', user: 'root', port: '22', key_file: '~/.ssh/id_ed25519', include: [], exclude: ['.git/**'], extra: '', remote_owner: 'www:www',
             run: null, last: { run_id: 'a', result: 'failed', acked: false, error: 'SSH 连接中断（退出码 255）', finished_at: now - 120, trigger: 'change', summary: '失败' } },

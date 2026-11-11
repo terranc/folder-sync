@@ -67,6 +67,51 @@ async function openPage(query, width, height) {
 }
 
 (async () => {
+  // ---------------- 项目编辑：匹配规则标签组与删除路径 ----------------
+  const ed = await openPage('?mode=window', 1000, 1400);
+  await ed.ev(`document.querySelector('[data-act="edit"]').click()`);
+  await sleep(300);
+  check('匹配符输入框提供占位示例', await ed.ev(`(() => {
+    const ph = (n) => (document.querySelector('form.editor [name="' + n + '"]') || {}).placeholder || '';
+    return ph('exclude').includes('node_modules/**') && ph('include').includes('img/**') && ph('delete_paths').includes('runtime/**');
+  })()`));
+  check('排除和仅包含组成标签组，删除设置位于其后', await ed.ev(`(() => {
+    const tabs = [...document.querySelectorAll('.pattern-tabs [role="tab"]')];
+    const following = document.querySelector('.pattern-tabs').compareDocumentPosition(document.getElementById('ed-del'));
+    return tabs.map(t => t.textContent).join(',') === '排除,仅包含' && (following & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  })()`));
+  check('默认显示排除，未勾选删除时显示额外路径', await ed.ev(`!document.getElementById('ed-panel-exclude').hidden && document.getElementById('ed-panel-include').hidden && getComputedStyle(document.getElementById('ed-delpaths')).display !== 'none'`));
+  check('来回切换标签保留排除和仅包含的值', await ed.ev(`(() => {
+    const f = document.querySelector('form.editor');
+    f.elements.exclude.value = 'dist/**';
+    document.querySelector('[data-pattern-tab="include"]').click();
+    const includeShown = !document.getElementById('ed-panel-include').hidden && document.getElementById('ed-panel-exclude').hidden;
+    f.elements.include.value = 'src/**';
+    document.querySelector('[data-pattern-tab="exclude"]').click();
+    return includeShown && !document.getElementById('ed-panel-exclude').hidden && document.getElementById('ed-panel-include').hidden && f.elements.exclude.value === 'dist/**' && f.elements.include.value === 'src/**';
+  })()`));
+  await ed.ev(`(() => { const d = document.getElementById('ed-del'); d.checked = true; d.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('勾选同步删除后隐藏额外路径但保留其值', await ed.ev(`(() => {
+    const f = document.querySelector('form.editor');
+    return getComputedStyle(document.getElementById('ed-delpaths')).display === 'none' && f.elements.delete_paths.value === 'public/assets';
+  })()`));
+  await ed.ev(`(() => { const d = document.getElementById('ed-del'); d.checked = false; d.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  check('取消勾选同步删除后重新显示额外路径', await ed.ev(`getComputedStyle(document.getElementById('ed-delpaths')).display !== 'none'`));
+  await ed.shot('editor-pattern-tabs');
+  await ed.ev(`(() => {
+    const mock = window.__fsMock, handle = mock.handle;
+    mock.handle = function(msg) {
+      if (msg.cmd === 'run' && msg.args[0] === 'rule-set') this.lastRuleSet = msg.args;
+      return handle.call(this, msg);
+    };
+    document.querySelector('[data-ed="save"]').click();
+  })()`);
+  await sleep(300);
+  check('保存时同时提交排除和仅包含规则', await ed.ev(`(() => {
+    const args = (window.__fsMock.lastRuleSet || []).join(' ');
+    return args.includes('exclude=dist/**') && args.includes('include=src/**');
+  })()`));
+
   // ---------------- 日志页（大窗口） ----------------
   const w = await openPage('?mode=window&route=history', 1000, 900);
   const rows = await w.ev(`[...document.querySelectorAll('#hist .hist')].map(r => r.dataset.run)`);

@@ -152,6 +152,7 @@ svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-widt
 
 /* ---------------- 表单 ---------------- */
 .field { margin-bottom: 12px; }
+.pattern-tabs { margin: 0 0 10px; }
 .field label { display: block; font-weight: 500; margin-bottom: 4px; }
 .field .hint { color: var(--sub); font-size: 11px; margin-top: 3px; }
 .field input[type=text], .field input[type=number], .field textarea, .field select {

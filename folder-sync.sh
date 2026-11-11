@@ -46,6 +46,7 @@ HISTORY_MAX="${FOLDER_SYNC_HISTORY_MAX:-1000}"   # 日志最多保留（也是�
 PATDIR="$STATE/pat.$$"
 PATTERN_INC="$PATDIR/inc"
 PATTERN_EXC="$PATDIR/exc"
+PATTERN_DEL="$PATDIR/del"
 
 # ---------- 全局默认（可被 [global] 覆盖） ----------
 G_DEBOUNCE=1
@@ -222,9 +223,11 @@ load_profile() {
   P_LOCAL=""; P_REMOTE=""; P_PROTOCOL="sftp"; P_HOST=""; P_PORT=""
   P_USER=""; P_KEY_FILE=""; P_PASSWORD=""; P_DIRECTION="local"
   P_DELETE="false"; P_ENABLED="true"; P_EXTRA=""; P_REMOTE_OWNER=""; P_ENGINE=""
+  P_DELETE_SCOPE="false"
   mkdir -p "$PATDIR" 2>/dev/null || true
   : > "$PATTERN_INC"
   : > "$PATTERN_EXC"
+  : > "$PATTERN_DEL"
   [ -f "$CONFIG" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in \#*|\;*) continue ;; esac
@@ -255,11 +258,14 @@ load_profile() {
       extra|extra_flags)     P_EXTRA="$val" ;;
       include|includes|sync|rules) add_patterns "$PATTERN_INC" "$val" ;;
       exclude|excludes)      add_patterns "$PATTERN_EXC" "$val" ;;
+      delete_paths)          add_patterns "$PATTERN_DEL" "$val" ;;
       remote_owner)          P_REMOTE_OWNER="$val" ;;
     esac
   done < "$CONFIG"
   while [ "$P_LOCAL" != "/" ] && [ "${P_LOCAL%/}" != "$P_LOCAL" ]; do P_LOCAL="${P_LOCAL%/}"; done
   while [ "$P_REMOTE" != "/" ] && [ "${P_REMOTE%/}" != "$P_REMOTE" ]; do P_REMOTE="${P_REMOTE%/}"; done
+  # 项目级 delete 开启时 delete_paths 不参与（全部路径都删除）
+  [ "$P_DELETE" = "true" ] || [ ! -s "$PATTERN_DEL" ] || P_DELETE_SCOPE="true"
   return 0
 }
 
@@ -281,8 +287,8 @@ check_profile() {
   [ -z "$P_PASSWORD" ] || { printf '[%s] 不支持配置密码，请使用 key_file 或 ssh-agent\n' "$p"; return 1; }
   case "${P_PORT:-22}" in *[!0-9]*) printf '[%s] port 必须是数字: %s\n' "$p" "$P_PORT"; return 1 ;; esac
   [ -d "$P_LOCAL" ] || { printf '[%s] 本地目录不存在: %s\n' "$p" "$P_LOCAL"; return 1; }
-  if [ "$P_DELETE" = "true" ] && [ "$P_REMOTE" = "/" ]; then
-    printf '[%s] remote 指向根目录时不能开启 delete\n' "$p"; return 1
+  if [ "$P_REMOTE" = "/" ] && { [ "$P_DELETE" = "true" ] || [ "$P_DELETE_SCOPE" = "true" ]; }; then
+    printf '[%s] remote 指向根目录时不能开启同步删除\n' "$p"; return 1
   fi
   if [ -n "$P_REMOTE_OWNER" ] &&
      ! printf '%s' "$P_REMOTE_OWNER" | grep -qE '^[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?$'; then
@@ -359,6 +365,98 @@ build_rsync_rules() {
     done < "$PATTERN_INC"
     RSYNC_RULES+=( -f "- *" )
   fi
+}
+
+# delete_paths 归一化：去 ./ 前缀、开头 /、末尾 /，匹配始终锚定在项目根
+normalize_delete_path() {
+  local p="$1"
+  while [ "${p#./}" != "$p" ]; do p="${p#./}"; done
+  while [ "${p#/}" != "$p" ]; do p="${p#/}"; done
+  while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+  printf '%s' "$p"
+}
+
+# 路径通配符转 ERE：** 多层，* 单层，? 单字符
+glob_to_ere() {
+  local p="$1" out="" i=0 c n
+  while [ "$i" -lt "${#p}" ]; do
+    c="${p:$i:1}"
+    n="${p:$((i + 1)):1}"
+    case "$c" in
+      '*')
+        if [ "$n" = "*" ]; then
+          # 与 rsync 的 "**/" 语义保持一致：至少跨一层目录（不匹配零层）。
+          out="$out.*"; i=$((i + 2)); continue
+        fi
+        out="$out[^/]*" ;;
+      '?') out="$out[^/]" ;;
+      '.'|'+'|'('|')'|'['|']'|'{'|'}'|'^'|'$'|'|'|'\') out="$out\\$c" ;;
+      *) out="$out$c" ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+# 生成 DELETE_SCOPE_RE，供增量删除清单过滤（全量同步由 rsync 过滤器处理）
+build_delete_scope_re() {
+  DELETE_SCOPE_RE=""
+  [ -s "$PATTERN_DEL" ] || return 0
+  local p sub out=""
+  while IFS= read -r p || [ -n "$p" ]; do
+    p="$(normalize_delete_path "$(trim "$p")")"
+    [ -n "$p" ] || continue
+    case "$p" in
+      *[*?]*)
+        case "$p" in
+          */\*\*) sub="$(glob_to_ere "${p%/**}")(/.*)?" ;;
+          *)      sub="$(glob_to_ere "$p")" ;;
+        esac ;;
+      *) sub="$(glob_to_ere "$p")(/.*)?" ;;
+    esac
+    out="${out}${out:+|}${sub}"
+  done < "$PATTERN_DEL"
+  [ -n "$out" ] && DELETE_SCOPE_RE="^(${out})$"
+  return 0
+}
+
+in_delete_scope() {
+  [ -n "${DELETE_SCOPE_RE:-}" ] || return 1
+  [[ "$1" =~ $DELETE_SCOPE_RE ]]
+}
+
+# rsync 过滤器只把 * ? 当通配符；[ ] \ 按字面量转义，避免路径被当成字符类而扩大删除范围
+rsync_glob_escape() {
+  local p="$1" out="" i=0 c
+  while [ "$i" -lt "${#p}" ]; do
+    c="${p:$i:1}"
+    case "$c" in
+      '['|']'|'\') out="$out\\$c" ;;
+      *) out="$out$c" ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+# 全量同步：把 --delete 的范围限制在 delete_paths 内，其余路径全部保护
+build_delete_scope_rules() {
+  [ "$P_DELETE_SCOPE" = "true" ] || return 0
+  local p rule
+  while IFS= read -r p || [ -n "$p" ]; do
+    p="$(normalize_delete_path "$(trim "$p")")"
+    [ -n "$p" ] || continue
+    case "$p" in
+      *[*?]*)
+        case "$p" in
+          */\*\*) rule="$(rsync_glob_escape "${p%/**}")/***" ;;
+          *)      rule="$(rsync_glob_escape "$p")" ;;
+        esac ;;
+      *) rule="$(rsync_glob_escape "$p")/***" ;;
+    esac
+    RSYNC_RULES+=( -f "R /$rule" )
+  done < "$PATTERN_DEL"
+  RSYNC_RULES+=( -f "P **" )
 }
 
 ssh_sock() { printf '%s/ssh/cm-%s@%s:%s' "$STATE" "$P_USER" "$P_HOST" "${P_PORT:-22}"; }
@@ -632,7 +730,10 @@ run_rule() {
   [ "$trigger" = "mirror" ] && [ "$P_REMOTE" = "/" ] &&
     die "[$prof] remote 指向根目录，不能同步到云端（会删除远端多余文件）"
   ensure_dirs
+  build_delete_scope_re
   build_rsync_rules
+  # 只有全量同步需要把删除范围限制在 delete_paths；mirror / push 的删除范围由清单决定
+  if [ "$trigger" = "full" ]; then build_delete_scope_rules; fi
   rm -rf "$PATDIR" 2>/dev/null || true
 
   # ---- 每规则锁：不同规则并行，同一规则串行 ----
@@ -668,7 +769,9 @@ run_rule() {
       case "$trigger" in
         pull|preview) printf '%s\n' "$rel" >> "$flist" ;;
         *)
-          if [ -e "$P_LOCAL/$rel" ] || [ -L "$P_LOCAL/$rel" ] || [ "$P_DELETE" = "true" ]; then
+          # push 是手动上传，保持原有语义：delete_paths 只影响自动增量同步
+          if [ -e "$P_LOCAL/$rel" ] || [ -L "$P_LOCAL/$rel" ] || [ "$P_DELETE" = "true" ] ||
+             { [ "$trigger" != "push" ] && [ "$P_DELETE_SCOPE" = "true" ] && in_delete_scope "$rel"; }; then
             printf '%s\n' "$rel" >> "$flist"
           fi ;;
       esac
@@ -693,12 +796,16 @@ run_rule() {
   case "$trigger" in
     full)
       args+=( --no-inc-recursive )
-      [ "$P_DELETE" = "true" ] && args+=( --delete )
+      if [ "$P_DELETE" = "true" ] || [ "$P_DELETE_SCOPE" = "true" ]; then args+=( --delete ); fi
       ;;
     change|push)
       args+=( "--files-from=$flist" --checksum )
       # --checksum：rsync 默认只看 size + 整秒 mtime，同一秒内改写且大小不变会被误判为未变化
-      if [ "$P_DELETE" = "true" ]; then args+=( --delete-missing-args ); else args+=( --ignore-missing-args ); fi
+      if [ "$P_DELETE" = "true" ] || { [ "$trigger" != "push" ] && [ "$P_DELETE_SCOPE" = "true" ]; }; then
+        args+=( --delete-missing-args )
+      else
+        args+=( --ignore-missing-args )
+      fi
       ;;
     mirror)
       # 手动"同步到云端"：无论项目是否启用、delete 是否勾选，都删除所选目录内的远端多余文件。
@@ -1362,11 +1469,14 @@ cmd_list() {
   read_global
   info "配置文件: $CONFIG"
   printf '%s %s %s %s\n' "$(pad_to 规则 16)" "$(pad_to 状态 6)" "$(pad_to 删除 6)" "路径"
-  local p
+  local p d
   for p in $(list_profiles); do
     load_profile "$p"
+    if [ "$P_DELETE" = true ]; then d=是
+    elif [ "$P_DELETE_SCOPE" = true ]; then d=部分
+    else d=否; fi
     printf '%s %s %s %s\n' "$(pad_to "$p" 16)" "$(pad_to "$( [ "$P_ENABLED" = true ] && echo 启用 || echo 停用 )" 6)" \
-      "$(pad_to "$( [ "$P_DELETE" = true ] && echo 是 || echo 否 )" 6)" "$P_LOCAL  →  $P_USER@$P_HOST:$P_REMOTE"
+      "$(pad_to "$d" 6)" "$P_LOCAL  →  $P_USER@$P_HOST:$P_REMOTE"
   done
 }
 
@@ -1393,9 +1503,10 @@ cmd_check() {
   need_tools
   local prof rc=0 out r
   for prof in $profs; do
-    load_profile "$prof"; validate_profile "$prof"; build_rsync_rules; rm -rf "$PATDIR"
+    load_profile "$prof"; validate_profile "$prof"; build_rsync_rules; build_delete_scope_rules; rm -rf "$PATDIR"
     info ""; info "=== [$prof] 差异对比"
-    local oargs=(); [ "$P_DELETE" = true ] && oargs=( --delete )
+    local oargs=()
+    [ "$P_DELETE" = true ] || [ "$P_DELETE_SCOPE" = true ] && oargs=( --delete )
     set +e
     out="$(LC_ALL=C "$RSYNC_BIN" -rlt --no-links --omit-dir-times -n -i "${oargs[@]}" "${RSYNC_RULES[@]}" \
       -e "$(build_ssh_e)" "$P_LOCAL/" "$P_USER@$P_HOST:$P_REMOTE/" 2>&1)"
@@ -1567,10 +1678,10 @@ rules_json() {
     msg="$(check_profile "$p")" || valid=false
     [ "$first" = 1 ] || printf ','
     first=0
-    printf '{"name":%s,"enabled":%s,"local":%s,"remote":%s,"host":%s,"port":%s,"user":%s,"key_file":%s,"delete":%s,"include":%s,"exclude":%s,"extra":%s,"remote_owner":%s,"valid":%s,"error":%s,"run":%s,"last":%s}' \
+    printf '{"name":%s,"enabled":%s,"local":%s,"remote":%s,"host":%s,"port":%s,"user":%s,"key_file":%s,"delete":%s,"include":%s,"exclude":%s,"delete_paths":%s,"extra":%s,"remote_owner":%s,"valid":%s,"error":%s,"run":%s,"last":%s}' \
       "$(json_str "$p")" "$P_ENABLED" "$(json_str "$P_LOCAL")" "$(json_str "$P_REMOTE")" "$(json_str "$P_HOST")" \
       "$(json_str "${P_PORT:-22}")" "$(json_str "$P_USER")" "$(json_str "$P_KEY_FILE")" "$P_DELETE" \
-      "$(json_lines "$PATTERN_INC")" "$(json_lines "$PATTERN_EXC")" "$(json_str "$P_EXTRA")" \
+      "$(json_lines "$PATTERN_INC")" "$(json_lines "$PATTERN_EXC")" "$(json_lines "$PATTERN_DEL")" "$(json_str "$P_EXTRA")" \
       "$(json_str "$P_REMOTE_OWNER")" "$valid" "$(json_str "$msg")" \
       "$(json_file_or_null "$STATUS_DIR/$p.run.json")" "$(json_file_or_null "$STATUS_DIR/$p.last.json")"
   done
@@ -1724,7 +1835,7 @@ cmd_trust_host() {
 
 # ---------------- 配置写入（保留注释、空行、未知字段） ----------------
 
-RULE_KEYS="local remote host port user key_file enabled delete include exclude extra remote_owner"
+RULE_KEYS="local remote host port user key_file enabled delete include exclude delete_paths extra remote_owner"
 GLOBAL_KEYS="debounce known_hosts ssh_multiplex watch_ignore"
 
 ini_edit() {
@@ -1748,6 +1859,7 @@ ini_edit() {
       elsif ($op eq "add") { die "EXISTS\n"; }
       my %alias = (local => [qw(local local_dir path)], remote => [qw(remote remote_dir)], host => [qw(host server)], user => [qw(user username)],
                    key_file => [qw(key_file keyfile)], include => [qw(include includes sync rules)], exclude => [qw(exclude excludes)],
+                   delete_paths => [qw(delete_paths)],
                    extra => [qw(extra extra_flags)], delete => [qw(delete mode)]);
       for my $pair (@kv) {
         my ($k, $v) = split /=/, $pair, 2; $v = "" unless defined $v;

@@ -161,6 +161,61 @@ global_conf; rule site "$L/site" /site 'mode = mirror'
 run list
 check "legacy mode = mirror maps to delete" 'contains "site +启用 +是"'
 
+# ---------------------------------------------------------------- 按文件夹同步删除
+global_conf; rule partial "$L/partial" /partial 'delete = false' 'delete_paths = uploads'
+mkdir -p "$L/partial/uploads/sub" "$L/partial/other" "$R/partial/uploads/sub" "$R/partial/other"
+echo a > "$L/partial/uploads/a.txt"; echo o > "$L/partial/other/o.txt"
+echo old > "$R/partial/uploads/old.txt"; echo deep > "$R/partial/uploads/sub/old2.txt"; echo keep > "$R/partial/other/keep.txt"
+run sync partial
+check "delete_paths removes remote extras only inside the path" \
+  '[ "$result" -eq 0 ] && [ ! -f "$R/partial/uploads/old.txt" ] && [ ! -f "$R/partial/uploads/sub/old2.txt" ] && [ -f "$R/partial/other/keep.txt" ]'
+check "delete_paths still uploads regular files" '[ -f "$R/partial/uploads/a.txt" ] && [ -f "$R/partial/other/o.txt" ]'
+run list
+check "list marks a rule with delete_paths as partial delete" 'contains "partial +启用 +部分"'
+run rules
+check "rules --json exposes delete_paths" 'python3 -c "import json,sys; d=json.load(open(sys.argv[1])); r=[x for x in d[\"rules\"] if x[\"name\"]==\"partial\"][0]; assert r[\"delete_paths\"]==[\"uploads\"]" "$TEST_TMP/output"'
+
+global_conf; rule partialx "$L/partialx" /partialx 'delete = false' 'delete_paths = uploads' 'exclude = uploads/protected.txt'
+mkdir -p "$L/partialx/uploads" "$R/partialx/uploads"
+echo a > "$L/partialx/uploads/a.txt"; echo p > "$R/partialx/uploads/protected.txt"; echo old > "$R/partialx/uploads/old.txt"
+run sync partialx
+check "exclude still protects remote files inside delete_paths" \
+  '[ "$result" -eq 0 ] && [ -f "$R/partialx/uploads/protected.txt" ] && [ ! -f "$R/partialx/uploads/old.txt" ]'
+
+global_conf; rule wild "$L/wild" /wild 'delete = false' 'delete_paths = runtime/**, logs/*'
+mkdir -p "$L/wild/runtime/a/b" "$L/wild/logs" "$L/wild/other"
+mkdir -p "$R/wild/runtime/a/b" "$R/wild/logs/sub" "$R/wild/other"
+echo k > "$L/wild/runtime/a/b/keep"; echo k > "$L/wild/logs/keep"; echo k > "$L/wild/other/keep"
+echo x > "$R/wild/runtime/a/b/old"; echo x > "$R/wild/runtime/old2"
+echo x > "$R/wild/logs/one"; echo x > "$R/wild/logs/sub/two"; echo x > "$R/wild/other/extra"
+run sync wild
+check "** in delete_paths covers multiple levels" '[ "$result" -eq 0 ] && [ ! -f "$R/wild/runtime/a/b/old" ] && [ ! -f "$R/wild/runtime/old2" ]'
+check "single * in delete_paths only covers one level" '[ ! -f "$R/wild/logs/one" ] && [ -f "$R/wild/logs/sub/two" ]'
+check "paths outside delete_paths keep remote extras" '[ -f "$R/wild/other/extra" ]'
+
+# delete_paths 里的 [] 必须按字面量处理，不能被 rsync 当成字符类而扩大删除范围
+global_conf; rule bracket "$L/bracket" /bracket 'delete = false' 'delete_paths = uploads[1]'
+mkdir -p "$L/bracket" "$R/bracket/uploads1" "$R/bracket/uploads[1]"
+echo x > "$R/bracket/uploads1/extra.txt"; echo x > "$R/bracket/uploads[1]/extra.txt"
+run sync bracket
+check "literal brackets in delete_paths do not widen the delete scope" \
+  '[ "$result" -eq 0 ] && [ -f "$R/bracket/uploads1/extra.txt" ] && [ ! -f "$R/bracket/uploads[1]/extra.txt" ]'
+
+global_conf; rule pushp "$L/pushp" /pushp 'delete = false' 'delete_paths = uploads'
+mkdir -p "$L/pushp/uploads" "$R/pushp/uploads"
+echo keep > "$R/pushp/uploads/gone.txt"
+run push "$L/pushp/uploads/gone.txt"
+check "manual push keeps its existing no-delete semantics" \
+  '[ "$result" -eq 0 ] && [ -f "$R/pushp/uploads/gone.txt" ]'
+
+global_conf; rule all "$L/all" /all 'delete = true' 'delete_paths = uploads'
+mkdir -p "$L/all/uploads" "$L/all/other" "$R/all/uploads" "$R/all/other"
+echo k > "$L/all/uploads/keep"; echo k > "$L/all/other/keep"
+echo x > "$R/all/uploads/old"; echo x > "$R/all/other/old"
+run sync all
+check "delete = true ignores delete_paths and deletes everywhere" \
+  '[ "$result" -eq 0 ] && [ ! -f "$R/all/uploads/old" ] && [ ! -f "$R/all/other/old" ]'
+
 # ---------------------------------------------------------------- push / pull
 global_conf; rule site "$L/site" /site
 echo p1 > "$L/site/p1.txt"; echo p2 > "$L/site/p2.txt"
@@ -204,6 +259,13 @@ echo old2 > "$R/mir/sub/old2.txt"; echo keeproot > "$R/mir/root2.txt"
 run mirror "$L/mir/sub"
 check "mirror limits deletion to the selected folder" \
   '[ "$result" -eq 0 ] && [ ! -f "$R/mir/sub/old2.txt" ] && [ -f "$R/mir/root2.txt" ]'
+
+global_conf; rule mirp "$L/mirp" /mirp 'delete = false' 'delete_paths = uploads'
+mkdir -p "$L/mirp/other" "$R/mirp/other"
+echo new > "$L/mirp/other/new.txt"; echo old > "$R/mirp/other/old.txt"
+run mirror "$L/mirp/other"
+check "mirror ignores delete_paths and still mirrors the selected folder" \
+  '[ "$result" -eq 0 ] && [ -f "$R/mirp/other/new.txt" ] && [ ! -f "$R/mirp/other/old.txt" ]'
 
 global_conf; rule rroot "$L/rroot" /
 run mirror "$L/rroot"
@@ -389,6 +451,7 @@ check "trust-host writes the confirmed key to known_hosts" '[ "$result" -eq 0 ] 
 # ---------------------------------------------------------------- 守护：改动即推送 / 即时删除 / 自动重载
 if command -v fswatch >/dev/null 2>&1; then
   global_conf; rule live "$L/live" /live 'delete = true' 'exclude = runtime/**'; rule keep "$L/keep" /keep
+  rule partiallive "$L/partiallive" /partiallive 'delete = false' 'delete_paths = up'
   rule gitlive "$L/gitlive" /gitlive
   rule burst "$L/burst" /burst
   # 准备一个两分支的 git 仓库：切分支时 HEAD/reflog 变化必须触发全量
@@ -418,6 +481,13 @@ if command -v fswatch >/dev/null 2>&1; then
   echo k > "$L/keep/k.txt"; wait_for "[ -f \"$R/keep/k.txt\" ]" 80
   rm "$L/keep/k.txt"; /bin/sleep 2
   check "local delete is ignored when delete = false" '[ -f "$R/keep/k.txt" ]'
+  mkdir -p "$L/partiallive/up" "$L/partiallive/other"
+  echo f > "$L/partiallive/up/f.txt"; echo g > "$L/partiallive/other/g.txt"
+  wait_for '[ -f "$R/partiallive/up/f.txt" ] && [ -f "$R/partiallive/other/g.txt" ]' 80
+  rm "$L/partiallive/up/f.txt" "$L/partiallive/other/g.txt"
+  check "local delete inside delete_paths is mirrored" 'wait_for "[ ! -f \"$R/partiallive/up/f.txt\" ]" 80'
+  /bin/sleep 2
+  check "local delete outside delete_paths is still ignored" '[ -f "$R/partiallive/other/g.txt" ]'
   mkdir -p "$L/live/runtime"; echo r > "$L/live/runtime/cache.txt"; echo ok > "$L/live/after.txt"
   wait_for "[ -f \"$R/live/after.txt\" ]" 80
   check "changes inside a rule-excluded dir are not pushed" '[ ! -f "$R/live/runtime/cache.txt" ]'
